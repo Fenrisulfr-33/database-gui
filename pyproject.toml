@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "database-gui"
+version = "0.1.0"
+description = "A CustomTkinter GUI for creating, viewing, updating, and deleting MongoDB databases, collections, and documents."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "customtkinter>=5.2",
+    "pymongo>=4.6",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "mongomock>=4.1",
+]
+
+# Lets teammates just type `db-gui` in the terminal to launch the app
+# once they've pip installed the project (see below).
+[project.scripts]
+db-gui = "db_gui.main:main"
+
+# Tells setuptools the installable package lives under src/, not the repo root.
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
