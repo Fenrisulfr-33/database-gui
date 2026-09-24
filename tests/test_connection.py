@@ -37,6 +37,27 @@ def test_connect_returns_sorted_database_names(monkeypatch: pytest.MonkeyPatch) 
     assert fake_client.closed
 
 
+def test_reconnect_closes_previous_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    first_client = FakeClient()
+    second_client = FakeClient()
+    clients = iter([first_client, second_client])
+    monkeypatch.setattr(
+        connection,
+        "MongoClient",
+        lambda *args, **kwargs: next(clients),
+    )
+
+    service = connection.MongoConnection("mongodb://cluster.example")
+
+    service.connect("alex", "secret")
+    assert not first_client.closed
+
+    service.connect("alex", "secret")
+
+    assert first_client.closed
+    assert not second_client.closed
+
+
 def test_connect_rejects_missing_credentials() -> None:
     service = connection.MongoConnection("mongodb://cluster.example")
 
