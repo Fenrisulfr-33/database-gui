@@ -48,7 +48,22 @@ class App(ctk.CTk):
             )
         else:
             self._connection = connection
-            self._show_view(DatabaseView(self, databases, self._disconnect))
+            self._show_view(
+                DatabaseView(
+                    self,
+                    databases,
+                    self._create_database,
+                    self._disconnect,
+                )
+            )
+
+    def _create_database(
+        self, database_name: str, collection_name: str
+    ) -> list[str]:
+        if self._connection is None:
+            raise ValueError(
+                "Connect to a cluster before creating a database.")
+        return self._connection.create_database(database_name, collection_name)
 
     def _disconnect(self) -> None:
         if self._connection is not None:
