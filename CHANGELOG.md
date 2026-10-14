@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org).
 
+## 2026-09-24
+
+### Added
+- `tests/test_connection.py` — `test_reconnect_closes_previous_client`, checking that calling `connect()` again closes the previous `MongoClient` before opening a new one.
+
+## 2026-09-23
+
+### Added
+- `db/connection.py` — `MongoConnection` class that validates the cluster URI, username, and password, connects with a 5s server-selection timeout, pings the cluster, and returns a sorted list of visible databases. `close()` shuts down the client without keeping the credentials.
+- `gui/views/connection_view.py` — `ConnectionView` login form (Cluster URI, Username, masked Password) with inline error messages. The password field is cleared after each submit.
+- `gui/views/database_view.py` — `DatabaseView` "Database home" screen that lists the databases returned at login (buttons are disabled for now) and has a Disconnect button.
+- `tests/test_connection.py` — tests for sorted database names, closing the client, and rejecting a missing URI or missing credentials (uses a fake client, no live MongoDB needed).
+
+### Changed
+- `gui/app.py` — the placeholder label is replaced by view routing: the app opens on `ConnectionView`, switches to `DatabaseView` after a successful login, and goes back to the login view on disconnect. Validation errors and `PyMongoError`s now show up in the form as a friendly error.
+
 ## 2026-09-21
 
 ### Added
