@@ -12,15 +12,33 @@ class FakeAdmin:
         assert name == "ping"
 
 
+class FakeDatabase:
+    """Record collection creation for a fake MongoDB database."""
+
+    def __init__(self, name: str, databases: list[str], created: list[tuple[str, str]]) -> None:
+        self.name = name
+        self.databases = databases
+        self.created = created
+
+    def create_collection(self, name: str) -> None:
+        self.created.append((self.name, name))
+        self.databases.append(self.name)
+
+
 class FakeClient:
     """Record client behavior without contacting MongoDB."""
 
     def __init__(self) -> None:
         self.admin = FakeAdmin()
         self.closed = False
+        self.databases = ["zebra", "alpha"]
+        self.created_collections: list[tuple[str, str]] = []
 
     def list_database_names(self) -> list[str]:
-        return ["zebra", "alpha"]
+        return self.databases
+
+    def __getitem__(self, name: str) -> FakeDatabase:
+        return FakeDatabase(name, self.databases, self.created_collections)
 
     def close(self) -> None:
         self.closed = True
@@ -28,7 +46,8 @@ class FakeClient:
 
 def test_connect_returns_sorted_database_names(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_client = FakeClient()
-    monkeypatch.setattr(connection, "MongoClient", lambda *args, **kwargs: fake_client)
+    monkeypatch.setattr(connection, "MongoClient",
+                        lambda *args, **kwargs: fake_client)
 
     service = connection.MongoConnection("mongodb://cluster.example")
 
@@ -70,3 +89,33 @@ def test_connect_rejects_missing_uri() -> None:
 
     with pytest.raises(ValueError, match="required"):
         service.connect("alex", "secret")
+
+
+def test_create_database_creates_initial_collection_and_returns_sorted_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_client = FakeClient()
+    monkeypatch.setattr(connection, "MongoClient",
+                        lambda *args, **kwargs: fake_client)
+    service = connection.MongoConnection("mongodb://cluster.example")
+    service.connect("alex", "secret")
+
+    databases = service.create_database(" new_db ", " start_here ")
+
+    assert fake_client.created_collections == [("new_db", "start_here")]
+    assert databases == ["alpha", "new_db", "zebra"]
+
+
+def test_create_database_rejects_existing_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_client = FakeClient()
+    monkeypatch.setattr(connection, "MongoClient",
+                        lambda *args, **kwargs: fake_client)
+    service = connection.MongoConnection("mongodb://cluster.example")
+    service.connect("alex", "secret")
+
+    with pytest.raises(ValueError, match="already exists"):
+        service.create_database("alpha", "start_here")
+
+    assert fake_client.created_collections == []
