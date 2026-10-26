@@ -49,6 +49,32 @@ class MongoConnection:
 
         self._client[database_name].create_collection(collection_name)
         return sorted(self._client.list_database_names())
+    
+    def create_collection(
+        self, database_name: str, collection_name: str
+    ) -> list[str]:
+        collection_name = collection_name.strip()
+        if not collection_name:
+            raise ValueError(
+                "Collection names are required.")
+        if self._client is None:
+            raise ValueError(
+                "Connect to a cluster before creating a database.")
+        if collection_name in self._client[database_name].list_collection_names():
+            raise ValueError("A collection with that name already exists.")
+
+        self._client[database_name].create_collection(collection_name)
+        return sorted(self._client[database_name].list_collection_names())
+
+    def list_databases(
+        self,
+    ) -> list[str]:
+        return sorted(self._client.list_database_names())
+    
+    def list_collections(
+        self, database_name
+    ) -> list[str]:
+        return sorted(self._client[database_name].list_collection_names())
 
 
 __all__ = ["MongoConnection", "PyMongoError"]

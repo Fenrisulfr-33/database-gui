@@ -13,10 +13,12 @@ class DatabaseView(ctk.CTkFrame):
         databases: list[str],
         create_database,
         logout,
+        collections,
     ) -> None:
         super().__init__(master)
         self._create_database_callback = create_database
         self._logout_callback = logout
+        self._collections_callback = collections
         self._build_view(databases)
 
     def _build_view(self, databases: list[str]) -> None:
@@ -56,7 +58,7 @@ class DatabaseView(ctk.CTkFrame):
                 self._database_list,
                 text=database,
                 anchor="w",
-                state="disabled",
+                command= lambda name=database: self._collections_callback(name),
             ).pack(fill="x", pady=4)
 
         if not databases:
