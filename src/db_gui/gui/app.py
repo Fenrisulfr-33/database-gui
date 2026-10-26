@@ -11,6 +11,7 @@ from ..db.connection import MongoConnection
 from .assets import BRAND_MARK, load_image
 from .views.connection_view import ConnectionView
 from .views.database_view import DatabaseView
+from .views.collection_view import CollectionView
 
 
 class App(ctk.CTk):
@@ -68,14 +69,34 @@ class App(ctk.CTk):
             )
         else:
             self._connection = connection
-            self._show_view(
-                DatabaseView(
-                    self,
-                    databases,
-                    self._create_database,
-                    self._disconnect,
-                )
+            self._database_view(databases)
+            
+    def _database_view(
+        self, databases: list[str]
+    ) -> None:
+        self._show_view(
+            DatabaseView(
+                self,
+                databases,
+                self._create_database,
+                self._disconnect,
+                self._collections_view
             )
+        )
+        
+    def _collections_view(
+        self, 
+        database,
+    ) -> None:
+        self._show_view(
+            CollectionView(
+            self, 
+            database, 
+            self._return_to_database_view,
+            self._list_collections,
+            self._create_collection
+            )
+        )
 
     def _create_database(
         self, database_name: str, collection_name: str
@@ -91,6 +112,24 @@ class App(ctk.CTk):
             self._connection = None
         self._show_view(ConnectionView(self, self._connect_to_cluster))
 
+    def _list_collections(
+            self, database_name
+        ) -> list[str]:
+            return self._connection.list_collections(database_name)
+        
+    def _return_to_database_view(
+        self,
+    ) -> None:
+        databases = self._connection.list_databases()
+        self._database_view(databases)
+            
+    def _create_collection(
+        self, database_name: str, collection_name: str
+    ) -> list[str]:
+        if self._connection is None:
+            raise ValueError(
+                "Connect to a cluster before creating a database.")
+        return self._connection.create_collection(database_name,collection_name)
 
 if __name__ == "__main__":
     # Lets you run this file directly (python src/db_gui/gui/app.py)
