@@ -1,9 +1,14 @@
-"""Root application window and view routing."""
+"""Root application window and view routing.
+
+Author: Archer (bumped default window size for the restyled login view;
+added the brand mark as the window icon)
+"""
 
 import customtkinter as ctk
 from pymongo.errors import PyMongoError
 
 from ..db.connection import MongoConnection
+from .assets import BRAND_MARK, load_image
 from .views.connection_view import ConnectionView
 from .views.database_view import DatabaseView
 from .views.collection_view import CollectionView
@@ -18,13 +23,28 @@ class App(ctk.CTk):
         ctk.set_appearance_mode("System")
         ctk.set_default_color_theme("blue")
 
-        self.title("Database GUI Manager")
-        self.geometry("900x600")
+        self.title("Arrow_>")
+        self._set_window_icon()
+        # Tall enough for the login card (design/Login.png) without clipping.
+        self.geometry("1100x820")
         self.minsize(600, 400)
         self._connection: MongoConnection | None = None
         self._current_view = None
 
         self._build_layout()
+
+    def _set_window_icon(self) -> None:
+        """Show the brand mark in the title bar (and taskbar) next to the title.
+
+        Author: Archer
+        """
+        # Kept on self: Tk drops the icon if the image is garbage-collected.
+        self._window_icon = load_image(BRAND_MARK, self)
+        self.iconphoto(True, self._window_icon)
+        # On Windows, CTk swaps in its own logo ~200ms after startup unless
+        # iconbitmap() was called. This flag is what iconbitmap() would set,
+        # so it stops CTk from overwriting our icon.
+        self._iconbitmap_method_called = True
 
     def _build_layout(self) -> None:
         self._show_view(

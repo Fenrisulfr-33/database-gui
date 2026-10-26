@@ -5,6 +5,10 @@
 
 	This installs the required packages, and the testing packages as dev so testing packages are not added in the build.
 
+## Run
+
+`db-gui`
+
 # Testing
 
 1. To run all tests run `pytest`
