@@ -39,6 +39,24 @@ Commit as often as you want to your branch, the only thing I ask is you commit o
 
 Tkinter - we choose this because its friendly to newcomers versus PySide which is industry standard and heavier learning curve.
 
+## Renaming a database
+
+The database home view can copy a database to a new name. The source database
+is removed only after the destination's collections, document counts, indexes,
+and views pass verification. Pause writes to the source during the operation;
+the application cannot prevent other clients from changing it while copying.
+
+The confirmation dialog estimates source data and index size when MongoDB
+allows the `dbStats` command. This is not a measurement of free cluster space
+and does not include other databases or operational storage. Check the hosting
+provider's storage metrics before continuing, especially on free-tier clusters.
+
+An interrupted or failed copy leaves the source untouched and records a
+recovery marker in the partial destination. The application will not overwrite
+an existing destination; inspect the provider dashboard and manually remove an
+incomplete destination before retrying. System databases and unsupported
+collection types are rejected rather than risking data loss.
+
 
 ## File Structure
 
