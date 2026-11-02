@@ -1,4 +1,8 @@
-"""Root application window and view routing."""
+"""Root application window and view routing.
+
+Author: Archer (bumped default window size for the restyled login view;
+added the brand mark as the window icon)
+"""
 
 from tkinter import messagebox
 
@@ -6,8 +10,10 @@ import customtkinter as ctk
 from pymongo.errors import PyMongoError
 
 from ..db.connection import MongoConnection
+from .assets import BRAND_MARK, load_image
 from .views.connection_view import ConnectionView
 from .views.database_view import DatabaseView
+from .views.collection_view import CollectionView
 
 
 class App(ctk.CTk):
@@ -19,13 +25,28 @@ class App(ctk.CTk):
         ctk.set_appearance_mode("System")
         ctk.set_default_color_theme("blue")
 
-        self.title("Database GUI Manager")
-        self.geometry("900x600")
+        self.title("Arrow_>")
+        self._set_window_icon()
+        # Tall enough for the login card (design/Login.png) without clipping.
+        self.geometry("1100x820")
         self.minsize(600, 400)
         self._connection: MongoConnection | None = None
         self._current_view = None
 
         self._build_layout()
+
+    def _set_window_icon(self) -> None:
+        """Show the brand mark in the title bar (and taskbar) next to the title.
+
+        Author: Archer
+        """
+        # Kept on self: Tk drops the icon if the image is garbage-collected.
+        self._window_icon = load_image(BRAND_MARK, self)
+        self.iconphoto(True, self._window_icon)
+        # On Windows, CTk swaps in its own logo ~200ms after startup unless
+        # iconbitmap() was called. This flag is what iconbitmap() would set,
+        # so it stops CTk from overwriting our icon.
+        self._iconbitmap_method_called = True
 
     def _build_layout(self) -> None:
         self._show_view(
@@ -50,138 +71,42 @@ class App(ctk.CTk):
             )
         else:
             self._connection = connection
-            self._show_database_view(databases)
-
-    def _show_database_view(self, databases: list[str]) -> None:
+            self._database_view(databases)
+            
+    def _database_view(
+        self, databases: list[str]
+    ) -> None:
         self._show_view(
-            DatabaseView(self, databases, self._rename_database, self._disconnect)
-        )
-
-    def _rename_database(self, source_name: str) -> None:
-        target_name = self._prompt_database_name(source_name)
-        if target_name is None:
-            return
-        connection = self._connection
-        if connection is None:
-            messagebox.showerror(
-                "Not connected", "Connect to a cluster before renaming.", parent=self
+            DatabaseView(
+                self,
+                databases,
+                self._create_database,
+                self._disconnect,
+                self._collections_view
             )
-            return
-        if not self._confirm_database_rename(connection, source_name, target_name):
-            return
-        try:
-            archive_path = connection.rename_database(source_name, target_name)
-        except (ValueError, PyMongoError, RuntimeError) as error:
-            self._report_rename_failure(connection, error)
-            return
-        self._report_rename_success(
-            connection, source_name, target_name, archive_path
         )
-
-    def _prompt_database_name(self, source_name: str) -> str | None:
-        dialog = ctk.CTkInputDialog(
-            text=f"Enter a new name for '{source_name}':",
-            title="Rename database",
-        )
-        target_name = dialog.get_input()
-        if target_name is None:
-            return None
-        target_name = target_name.strip()
-        if not target_name:
-            messagebox.showerror(
-                "Invalid name", "A database name is required.", parent=self
-            )
-            return None
-        return target_name
-
-    def _confirm_database_rename(
-        self,
-        connection: MongoConnection,
-        source_name: str,
-        target_name: str,
-    ) -> bool:
-        estimate = connection.get_database_size(source_name)
-        warning = self._build_rename_warning(source_name, target_name, estimate)
-        return messagebox.askyesno("Confirm database rename", warning, parent=self)
-
-    def _report_rename_failure(
-        self, connection: MongoConnection, error: Exception
+        
+    def _collections_view(
+        self, 
+        database,
     ) -> None:
-        messagebox.showerror(
-            "Database rename failed",
-            f"{error}\n\nCheck the cluster state before retrying. If the "
-            "message includes a local recovery archive path, keep that file.",
-            parent=self,
+        self._show_view(
+            CollectionView(
+            self, 
+            database, 
+            self._return_to_database_view,
+            self._list_collections,
+            self._create_collection
+            )
         )
-        try:
-            self._show_database_view(connection.list_databases())
-        except PyMongoError:
-            messagebox.showwarning(
-                "Database list unavailable",
-                "The database list could not be refreshed. Reconnect to "
-                "check the cluster state.",
-                parent=self,
-            )
 
-    def _report_rename_success(
-        self,
-        connection: MongoConnection,
-        source_name: str,
-        target_name: str,
-        archive_path: str | None,
-    ) -> None:
-        try:
-            self._show_database_view(connection.list_databases())
-        except PyMongoError:
-            messagebox.showwarning(
-                "Database renamed",
-                "The rename succeeded, but the database list could not be "
-                "refreshed. Reconnect to see the updated list.",
-                parent=self,
-            )
-            return
-        self._show_rename_outcome(source_name, target_name, archive_path)
-
-    def _show_rename_outcome(
-        self, source_name: str, target_name: str, archive_path: str | None
-    ) -> None:
-        if archive_path is None:
-            messagebox.showinfo(
-                "Database renamed",
-                f"'{source_name}' was saved to a local BSON archive, verified, "
-                f"and restored as '{target_name}'. The original was removed.",
-                parent=self,
-            )
-        else:
-            messagebox.showwarning(
-                "Database renamed; local cleanup needed",
-                f"'{source_name}' was restored as '{target_name}', but the "
-                f"temporary local archive could not be removed:\n{archive_path}",
-                parent=self,
-            )
-
-    @staticmethod
-    def _build_rename_warning(
-        source_name: str, target_name: str, estimate: int | None
-    ) -> str:
-        if estimate is None:
-            size_note = "We couldn't estimate how much local disk space is needed."
-        else:
-            size_mb = estimate / 1_000_000
-            size_note = f"The database is about {size_mb:.1f} MB."
-        return (
-            f"Rename '{source_name}' to '{target_name}'?\n\n"
-            "We'll save a temporary BSON archive on this computer and verify "
-            "it before removing the old database. Then we'll create the new "
-            "database, restore from the archive, and verify the restored data.\n\n"
-            f"{size_note} The archive needs local disk space. It is removed "
-            "after a successful rename; if automatic recovery fails, the "
-            "archive is kept and its location is shown. This avoids keeping "
-            "two database copies in the cluster at once. Your provider may "
-            "not immediately reduce its reported allocated storage afterward.\n\n"
-            "The local archive is not encrypted. Pause apps that are changing "
-            "this database until the rename is finished."
-        )
+    def _create_database(
+        self, database_name: str, collection_name: str
+    ) -> list[str]:
+        if self._connection is None:
+            raise ValueError(
+                "Connect to a cluster before creating a database.")
+        return self._connection.create_database(database_name, collection_name)
 
     def _disconnect(self) -> None:
         if self._connection is not None:
@@ -189,6 +114,24 @@ class App(ctk.CTk):
             self._connection = None
         self._show_view(ConnectionView(self, self._connect_to_cluster))
 
+    def _list_collections(
+            self, database_name
+        ) -> list[str]:
+            return self._connection.list_collections(database_name)
+        
+    def _return_to_database_view(
+        self,
+    ) -> None:
+        databases = self._connection.list_databases()
+        self._database_view(databases)
+            
+    def _create_collection(
+        self, database_name: str, collection_name: str
+    ) -> list[str]:
+        if self._connection is None:
+            raise ValueError(
+                "Connect to a cluster before creating a database.")
+        return self._connection.create_collection(database_name,collection_name)
 
 if __name__ == "__main__":
     # Lets you run this file directly (python src/db_gui/gui/app.py)

@@ -31,3 +31,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# Ship the images in src/db_gui/assets/ (brand mark, etc.) with the package.
+[tool.setuptools.package-data]
+db_gui = ["assets/*.png"]

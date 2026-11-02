@@ -13,15 +13,33 @@ class FakeAdmin:
         assert name == "ping"
 
 
+class FakeDatabase:
+    """Record collection creation for a fake MongoDB database."""
+
+    def __init__(self, name: str, databases: list[str], created: list[tuple[str, str]]) -> None:
+        self.name = name
+        self.databases = databases
+        self.created = created
+
+    def create_collection(self, name: str) -> None:
+        self.created.append((self.name, name))
+        self.databases.append(self.name)
+
+
 class FakeClient:
     """Record client behavior without contacting MongoDB."""
 
     def __init__(self) -> None:
         self.admin = FakeAdmin()
         self.closed = False
+        self.databases = ["zebra", "alpha"]
+        self.created_collections: list[tuple[str, str]] = []
 
     def list_database_names(self) -> list[str]:
-        return ["zebra", "alpha"]
+        return self.databases
+
+    def __getitem__(self, name: str) -> FakeDatabase:
+        return FakeDatabase(name, self.databases, self.created_collections)
 
     def close(self) -> None:
         self.closed = True
@@ -55,7 +73,8 @@ def _add_collection_metadata(database, name: str) -> None:
 
 def test_connect_returns_sorted_database_names(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_client = FakeClient()
-    monkeypatch.setattr(connection, "MongoClient", lambda *args, **kwargs: fake_client)
+    monkeypatch.setattr(connection, "MongoClient",
+                        lambda *args, **kwargs: fake_client)
 
     service = connection.MongoConnection("mongodb://cluster.example")
 
@@ -99,87 +118,31 @@ def test_connect_rejects_missing_uri() -> None:
         service.connect("alex", "secret")
 
 
-def test_rename_database_restores_data_and_indexes_from_local_archive() -> None:
-    service, client = _connected_service()
-    source = client["misspelled"]
-    source["records"].insert_many([{"value": 1}, {"value": 2}])
-    source["records"].create_index("value")
-    _add_collection_metadata(source, "records")
-    archive_path = service.rename_database("misspelled", "renamed")
-
-    assert archive_path is None
-    assert "misspelled" not in client.list_database_names()
-    assert list(client["renamed"]["records"].find({}, {"_id": 0})) == [
-        {"value": 1},
-        {"value": 2},
-    ]
-    assert "value_1" in client["renamed"]["records"].index_information()
-
-
-def test_rename_database_keeps_source_when_local_export_fails(
+def test_create_database_creates_initial_collection_and_returns_sorted_names(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service, client = _connected_service()
-    source = client["misspelled"]
-    source["records"].insert_one({"value": 1})
-    _add_collection_metadata(source, "records")
+    fake_client = FakeClient()
+    monkeypatch.setattr(connection, "MongoClient",
+                        lambda *args, **kwargs: fake_client)
+    service = connection.MongoConnection("mongodb://cluster.example")
+    service.connect("alex", "secret")
 
-    def fail_find(query):
-        assert query == {}
-        raise RuntimeError("copy interrupted")
+    databases = service.create_database(" new_db ", " start_here ")
 
-    monkeypatch.setattr(source["records"], "find", fail_find)
-
-    with pytest.raises(RuntimeError, match="copy interrupted"):
-        service.rename_database("misspelled", "renamed")
-
-    assert "misspelled" in client.list_database_names()
-    assert "renamed" not in client.list_database_names()
+    assert fake_client.created_collections == [("new_db", "start_here")]
+    assert databases == ["alpha", "new_db", "zebra"]
 
 
-def test_rename_database_restores_source_if_new_database_restore_fails(
+def test_create_database_rejects_existing_database(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service, client = _connected_service()
-    source = client["misspelled"]
-    source["records"].insert_one({"value": 1})
-    _add_collection_metadata(source, "records")
-    restore_archive = connection.MongoConnection._restore_archive
-
-    def fail_new_database(
-        database, archive_path: str, created_content: list[str] | None = None
-    ) -> None:
-        if database.name == "renamed":
-            raise RuntimeError("restore interrupted")
-        restore_archive(database, archive_path, created_content)
-
-    monkeypatch.setattr(
-        connection.MongoConnection, "_restore_archive", staticmethod(fail_new_database)
-    )
-
-    with pytest.raises(RuntimeError, match="original database was restored"):
-        service.rename_database("misspelled", "renamed")
-
-    assert "misspelled" in client.list_database_names()
-    assert "renamed" not in client.list_database_names()
-    assert client["misspelled"]["records"].find_one()["value"] == 1
-
-
-def test_rename_database_rejects_existing_destination() -> None:
-    service, client = _connected_service()
-    client["misspelled"]["records"].insert_one({"value": 1})
-    client["renamed"]["records"].insert_one({"value": 2})
+    fake_client = FakeClient()
+    monkeypatch.setattr(connection, "MongoClient",
+                        lambda *args, **kwargs: fake_client)
+    service = connection.MongoConnection("mongodb://cluster.example")
+    service.connect("alex", "secret")
 
     with pytest.raises(ValueError, match="already exists"):
-        service.rename_database("misspelled", "renamed")
+        service.create_database("alpha", "start_here")
 
-    assert "misspelled" in client.list_database_names()
-    assert client["renamed"]["records"].find_one()["value"] == 2
-
-
-@pytest.mark.parametrize("target_name", ["", "has.dot", "has/slash", "too-long-" * 8])
-def test_rename_database_rejects_invalid_name(target_name: str) -> None:
-    service, _ = _connected_service()
-
-    with pytest.raises(ValueError, match="valid|64 bytes"):
-        service.rename_database("source", target_name)
+    assert fake_client.created_collections == []
