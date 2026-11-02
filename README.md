@@ -41,21 +41,25 @@ Tkinter - we choose this because its friendly to newcomers versus PySide which i
 
 ## Renaming a database
 
-The database home view can copy a database to a new name. The source database
-is removed only after the destination's collections, document counts, indexes,
-and views pass verification. Pause writes to the source during the operation;
-the application cannot prevent other clients from changing it while copying.
+The database home view renames a database through a temporary BSON archive on
+the local computer. The archive is read back and checked before the source is
+removed. The new database is then created from that archive and verified for
+collection options, document contents, indexes, and views. This avoids
+temporarily keeping both database copies in the cluster. It does not guarantee
+that provider-reported or billed allocated storage will decrease immediately;
+check the hosting provider's storage metrics afterward.
 
-The confirmation dialog estimates source data and index size when MongoDB
-allows the `dbStats` command. This is not a measurement of free cluster space
-and does not include other databases or operational storage. Check the hosting
-provider's storage metrics before continuing, especially on free-tier clusters.
+The confirmation dialog estimates the local disk space needed when MongoDB
+allows the `dbStats` command. The archive is unencrypted, is removed after a
+successful rename, and is retained with its path reported if automatic recovery
+fails. Pause writes to the source during the operation; the application cannot
+prevent other clients from changing it while the archive is being created.
 
-An interrupted or failed copy leaves the source untouched and records a
-recovery marker in the partial destination. The application will not overwrite
-an existing destination; inspect the provider dashboard and manually remove an
-incomplete destination before retrying. System databases and unsupported
-collection types are rejected rather than risking data loss.
+If restoring or verifying the new database fails, the application attempts to
+restore the original from the local archive. Review the error and cluster state
+before retrying. The application will not overwrite an existing destination.
+System databases and unsupported collection types are rejected rather than
+risking data loss.
 
 
 ## File Structure

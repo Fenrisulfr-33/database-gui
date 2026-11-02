@@ -70,12 +70,12 @@ class App(ctk.CTk):
         if not self._confirm_database_rename(connection, source_name, target_name):
             return
         try:
-            marker_removed = connection.rename_database(source_name, target_name)
+            archive_path = connection.rename_database(source_name, target_name)
         except (ValueError, PyMongoError, RuntimeError) as error:
             self._report_rename_failure(connection, error)
             return
         self._report_rename_success(
-            connection, source_name, target_name, marker_removed
+            connection, source_name, target_name, archive_path
         )
 
     def _prompt_database_name(self, source_name: str) -> str | None:
@@ -109,8 +109,8 @@ class App(ctk.CTk):
     ) -> None:
         messagebox.showerror(
             "Database rename failed",
-            f"{error}\n\nThe original database was not removed. If copying "
-            "started, a marked partial destination may remain.",
+            f"{error}\n\nCheck the cluster state before retrying. If the "
+            "message includes a local recovery archive path, keep that file.",
             parent=self,
         )
         try:
@@ -128,7 +128,7 @@ class App(ctk.CTk):
         connection: MongoConnection,
         source_name: str,
         target_name: str,
-        marker_removed: bool,
+        archive_path: str | None,
     ) -> None:
         try:
             self._show_database_view(connection.list_databases())
@@ -140,23 +140,23 @@ class App(ctk.CTk):
                 parent=self,
             )
             return
-        self._show_rename_outcome(source_name, target_name, marker_removed)
+        self._show_rename_outcome(source_name, target_name, archive_path)
 
     def _show_rename_outcome(
-        self, source_name: str, target_name: str, marker_removed: bool
+        self, source_name: str, target_name: str, archive_path: str | None
     ) -> None:
-        if marker_removed:
+        if archive_path is None:
             messagebox.showinfo(
                 "Database renamed",
-                f"'{source_name}' was copied to '{target_name}' and the original "
-                "was removed.",
+                f"'{source_name}' was saved to a local BSON archive, verified, "
+                f"and restored as '{target_name}'. The original was removed.",
                 parent=self,
             )
         else:
             messagebox.showwarning(
-                "Database renamed; cleanup needed",
-                f"'{source_name}' was removed after verification, but the "
-                "temporary recovery marker remains in '{target_name}'.",
+                "Database renamed; local cleanup needed",
+                f"'{source_name}' was restored as '{target_name}', but the "
+                f"temporary local archive could not be removed:\n{archive_path}",
                 parent=self,
             )
 
@@ -165,21 +165,22 @@ class App(ctk.CTk):
         source_name: str, target_name: str, estimate: int | None
     ) -> str:
         if estimate is None:
-            size_note = "We couldn't estimate how much extra storage the copy needs."
+            size_note = "We couldn't estimate how much local disk space is needed."
         else:
             size_mb = estimate / 1_000_000
             size_note = f"The database is about {size_mb:.1f} MB."
         return (
             f"Rename '{source_name}' to '{target_name}'?\n\n"
-            "We'll copy your database to the new name. Once the copy is "
-            "complete, we'll remove the old one.\n\n"
-            f"{size_note} The copy needs extra storage while it runs, and the "
-            "actual amount available may be different. If there isn't enough "
-            "space or the copy is interrupted, your original database will "
-            "stay safe. An unfinished copy may need to be removed before "
-            "trying again.\n\n"
-            "Please pause apps that are changing this database until the "
-            "rename is finished."
+            "We'll save a temporary BSON archive on this computer and verify "
+            "it before removing the old database. Then we'll create the new "
+            "database, restore from the archive, and verify the restored data.\n\n"
+            f"{size_note} The archive needs local disk space. It is removed "
+            "after a successful rename; if automatic recovery fails, the "
+            "archive is kept and its location is shown. This avoids keeping "
+            "two database copies in the cluster at once. Your provider may "
+            "not immediately reduce its reported allocated storage afterward.\n\n"
+            "The local archive is not encrypted. Pause apps that are changing "
+            "this database until the rename is finished."
         )
 
     def _disconnect(self) -> None:

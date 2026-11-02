@@ -29,6 +29,19 @@ class FakeClient:
 
 def _connected_service() -> tuple[connection.MongoConnection, mongomock.MongoClient]:
     client = mongomock.MongoClient()
+    get_database = client.get_database
+
+    def database_with_collection_metadata(name: str):
+        database = get_database(name)
+        database.list_collections = lambda: iter(
+            [
+                {"name": collection, "type": "collection", "options": {}}
+                for collection in database.list_collection_names()
+            ]
+        )
+        return database
+
+    client.get_database = database_with_collection_metadata
     service = connection.MongoConnection("mongodb://cluster.example")
     service._client = client
     return service, client
@@ -86,50 +99,70 @@ def test_connect_rejects_missing_uri() -> None:
         service.connect("alex", "secret")
 
 
-def test_rename_database_copies_data_and_indexes_before_dropping_source() -> None:
+def test_rename_database_restores_data_and_indexes_from_local_archive() -> None:
     service, client = _connected_service()
     source = client["misspelled"]
     source["records"].insert_many([{"value": 1}, {"value": 2}])
     source["records"].create_index("value")
     _add_collection_metadata(source, "records")
-    client.get_database("renamed").list_collections = lambda: iter(
-        [{"name": "records", "type": "collection"}]
-    )
+    archive_path = service.rename_database("misspelled", "renamed")
 
-    marker_removed = service.rename_database("misspelled", "renamed")
-
-    assert marker_removed
+    assert archive_path is None
     assert "misspelled" not in client.list_database_names()
     assert list(client["renamed"]["records"].find({}, {"_id": 0})) == [
         {"value": 1},
         {"value": 2},
     ]
     assert "value_1" in client["renamed"]["records"].index_information()
-    assert connection.MongoConnection._RENAME_STATE_COLLECTION not in (
-        client["renamed"].list_collection_names()
-    )
 
 
-def test_rename_database_preserves_source_and_marks_partial_copy_on_failure(
+def test_rename_database_keeps_source_when_local_export_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service, client = _connected_service()
     source = client["misspelled"]
     source["records"].insert_one({"value": 1})
     _add_collection_metadata(source, "records")
-    monkeypatch.setattr(
-        source["records"], "find", lambda *args, **kwargs: (_ for _ in ()).throw(
-            RuntimeError("copy interrupted")
-        )
-    )
+
+    def fail_find(query):
+        assert query == {}
+        raise RuntimeError("copy interrupted")
+
+    monkeypatch.setattr(source["records"], "find", fail_find)
 
     with pytest.raises(RuntimeError, match="copy interrupted"):
         service.rename_database("misspelled", "renamed")
 
     assert "misspelled" in client.list_database_names()
-    assert "renamed" in client.list_database_names()
-    marker = client["renamed"][connection.MongoConnection._RENAME_STATE_COLLECTION]
-    assert marker.find_one({"_id": "rename"})["status"] == "copying"
+    assert "renamed" not in client.list_database_names()
+
+
+def test_rename_database_restores_source_if_new_database_restore_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, client = _connected_service()
+    source = client["misspelled"]
+    source["records"].insert_one({"value": 1})
+    _add_collection_metadata(source, "records")
+    restore_archive = connection.MongoConnection._restore_archive
+
+    def fail_new_database(
+        database, archive_path: str, created_content: list[str] | None = None
+    ) -> None:
+        if database.name == "renamed":
+            raise RuntimeError("restore interrupted")
+        restore_archive(database, archive_path, created_content)
+
+    monkeypatch.setattr(
+        connection.MongoConnection, "_restore_archive", staticmethod(fail_new_database)
+    )
+
+    with pytest.raises(RuntimeError, match="original database was restored"):
+        service.rename_database("misspelled", "renamed")
+
+    assert "misspelled" in client.list_database_names()
+    assert "renamed" not in client.list_database_names()
+    assert client["misspelled"]["records"].find_one()["value"] == 1
 
 
 def test_rename_database_rejects_existing_destination() -> None:
