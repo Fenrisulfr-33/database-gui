@@ -1,6 +1,7 @@
 """Tests for MongoDB connection lifecycle."""
 
 import pytest
+import mongomock
 
 from db_gui.db import connection
 
@@ -42,6 +43,32 @@ class FakeClient:
 
     def close(self) -> None:
         self.closed = True
+
+
+def _connected_service() -> tuple[connection.MongoConnection, mongomock.MongoClient]:
+    client = mongomock.MongoClient()
+    get_database = client.get_database
+
+    def database_with_collection_metadata(name: str):
+        database = get_database(name)
+        database.list_collections = lambda: iter(
+            [
+                {"name": collection, "type": "collection", "options": {}}
+                for collection in database.list_collection_names()
+            ]
+        )
+        return database
+
+    client.get_database = database_with_collection_metadata
+    service = connection.MongoConnection("mongodb://cluster.example")
+    service._client = client
+    return service, client
+
+
+def _add_collection_metadata(database, name: str) -> None:
+    database.list_collections = lambda: iter(
+        [{"name": name, "type": "collection", "options": {}}]
+    )
 
 
 def test_connect_returns_sorted_database_names(monkeypatch: pytest.MonkeyPatch) -> None:

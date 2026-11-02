@@ -1,11 +1,33 @@
 """MongoDB connection lifecycle and cluster discovery."""
 
-from pymongo import MongoClient
+import hashlib
+import os
+import tempfile
+from dataclasses import dataclass
+from typing import BinaryIO
+
+from bson import BSON
+from bson.codec_options import CodecOptions
+from pymongo import IndexModel, MongoClient
+from pymongo.database import Database
 from pymongo.errors import PyMongoError
+
+
+@dataclass
+class _RenameOperation:
+    client: MongoClient
+    source_name: str
+    target_name: str
+    archive_path: str
+    manifest: dict | None = None
+    preserve_archive: bool = False
 
 
 class MongoConnection:
     """Create, validate, and close a MongoDB cluster connection."""
+
+    _ARCHIVE_MAGIC = b"DBGUI-BSON-1\n"
+    _MAX_BSON_SIZE = 16 * 1024 * 1024
 
     def __init__(self, uri: str) -> None:
         self._uri = uri.strip()
@@ -25,7 +47,7 @@ class MongoConnection:
             serverSelectionTimeoutMS=5000,
         )
         self._client.admin.command("ping")
-        return sorted(self._client.list_database_names())
+        return self.list_databases()
 
     def close(self) -> None:
         """Close the active client without retaining login credentials."""

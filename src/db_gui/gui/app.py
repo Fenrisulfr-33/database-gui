@@ -4,6 +4,8 @@ Author: Archer (bumped default window size for the restyled login view;
 added the brand mark as the window icon)
 """
 
+from tkinter import messagebox
+
 import customtkinter as ctk
 from pymongo.errors import PyMongoError
 

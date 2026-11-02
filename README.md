@@ -39,6 +39,28 @@ Commit as often as you want to your branch, the only thing I ask is you commit o
 
 Tkinter - we choose this because its friendly to newcomers versus PySide which is industry standard and heavier learning curve.
 
+## Renaming a database
+
+The database home view renames a database through a temporary BSON archive on
+the local computer. The archive is read back and checked before the source is
+removed. The new database is then created from that archive and verified for
+collection options, document contents, indexes, and views. This avoids
+temporarily keeping both database copies in the cluster. It does not guarantee
+that provider-reported or billed allocated storage will decrease immediately;
+check the hosting provider's storage metrics afterward.
+
+The confirmation dialog estimates the local disk space needed when MongoDB
+allows the `dbStats` command. The archive is unencrypted, is removed after a
+successful rename, and is retained with its path reported if automatic recovery
+fails. Pause writes to the source during the operation; the application cannot
+prevent other clients from changing it while the archive is being created.
+
+If restoring or verifying the new database fails, the application attempts to
+restore the original from the local archive. Review the error and cluster state
+before retrying. The application will not overwrite an existing destination.
+System databases and unsupported collection types are rejected rather than
+risking data loss.
+
 
 ## File Structure
 
