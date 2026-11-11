@@ -146,3 +146,92 @@ def test_create_database_rejects_existing_database(
         service.create_database("alpha", "start_here")
 
     assert fake_client.created_collections == []
+
+
+def test_rename_database_restores_data_and_indexes_from_local_archive() -> None:
+    service, client = _connected_service()
+    source = client["misspelled"]
+    source["records"].insert_many([{"value": 1}, {"value": 2}])
+    source["records"].create_index("value")
+    _add_collection_metadata(source, "records")
+
+    archive_path = service.rename_database("misspelled", "renamed")
+
+    assert archive_path is None
+    assert "misspelled" not in client.list_database_names()
+    assert list(client["renamed"]["records"].find({}, {"_id": 0})) == [
+        {"value": 1},
+        {"value": 2},
+    ]
+    assert "value_1" in client["renamed"]["records"].index_information()
+
+
+def test_rename_database_keeps_source_when_local_export_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, client = _connected_service()
+    source = client["misspelled"]
+    source["records"].insert_one({"value": 1})
+    _add_collection_metadata(source, "records")
+
+    def fail_find(query):
+        assert query == {}
+        raise RuntimeError("copy interrupted")
+
+    monkeypatch.setattr(source["records"], "find", fail_find)
+
+    with pytest.raises(RuntimeError, match="copy interrupted"):
+        service.rename_database("misspelled", "renamed")
+
+    assert "misspelled" in client.list_database_names()
+    assert "renamed" not in client.list_database_names()
+
+
+def test_rename_database_restores_source_if_new_database_restore_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, client = _connected_service()
+    source = client["misspelled"]
+    source["records"].insert_one({"value": 1})
+    _add_collection_metadata(source, "records")
+    restore_archive = connection.MongoConnection._restore_archive
+
+    def fail_new_database(
+        database, archive_path: str, created_content: list[str] | None = None
+    ) -> None:
+        if database.name == "renamed":
+            raise RuntimeError("restore interrupted")
+        restore_archive(database, archive_path, created_content)
+
+    monkeypatch.setattr(
+        connection.MongoConnection, "_restore_archive", staticmethod(fail_new_database)
+    )
+
+    with pytest.raises(RuntimeError, match="original database was restored"):
+        service.rename_database("misspelled", "renamed")
+
+    assert "misspelled" in client.list_database_names()
+    assert "renamed" not in client.list_database_names()
+    assert client["misspelled"]["records"].find_one()["value"] == 1
+
+
+def test_rename_database_rejects_existing_destination() -> None:
+    service, client = _connected_service()
+    client["misspelled"]["records"].insert_one({"value": 1})
+    client["renamed"]["records"].insert_one({"value": 2})
+
+    with pytest.raises(ValueError, match="already exists"):
+        service.rename_database("misspelled", "renamed")
+
+    assert "misspelled" in client.list_database_names()
+    assert client["renamed"]["records"].find_one()["value"] == 2
+
+
+@pytest.mark.parametrize(
+    "target_name", ["", "has.dot", "has/slash", "too-long-" * 8]
+)
+def test_rename_database_rejects_invalid_name(target_name: str) -> None:
+    service, _ = _connected_service()
+
+    with pytest.raises(ValueError, match="valid|64 bytes"):
+        service.rename_database("source", target_name)
