@@ -14,11 +14,13 @@ class DatabaseView(ctk.CTkFrame):
         create_database,
         logout,
         collections,
+        rename_database,
     ) -> None:
         super().__init__(master)
         self._create_database_callback = create_database
         self._logout_callback = logout
         self._collections_callback = collections
+        self._rename_database_callback = rename_database
         self._build_view(databases)
 
     def _build_view(self, databases: list[str]) -> None:
@@ -54,17 +56,28 @@ class DatabaseView(ctk.CTkFrame):
         for child in self._database_list.winfo_children():
             child.destroy()
         for database in databases:
-            ctk.CTkButton(
-                self._database_list,
-                text=database,
-                anchor="w",
-                command= lambda name=database: self._collections_callback(name),
-            ).pack(fill="x", pady=4)
+            self._add_database_row(database)
 
         if not databases:
             ctk.CTkLabel(self._database_list, text="No databases were found.").pack(
                 pady=20
             )
+
+    def _add_database_row(self, database: str) -> None:
+        row = ctk.CTkFrame(self._database_list, fg_color="transparent")
+        row.pack(fill="x", pady=4)
+        ctk.CTkButton(
+            row,
+            text=database,
+            anchor="w",
+            command=lambda name=database: self._collections_callback(name),
+        ).pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(
+            row,
+            text="Rename",
+            width=90,
+            command=lambda name=database: self._rename_database_callback(name),
+        ).pack(side="right", padx=(8, 0))
 
     def _prompt_create_database(self) -> None:
         database_name = ctk.CTkInputDialog(
