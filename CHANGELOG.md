@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org).
 
+## 2026-11-17
+
+### Added
+- Collections can now be opened. The new collection screen lists its documents and has **Add document** (type JSON in a pop-up) and **Import JSON file** (a JSON object, a list of objects, or JSON Lines) buttons. The list refreshes after each add.
+- `db/connection.py` — `list_documents()`, `add_document()` and `add_documents()`. Documents whose `_id` already exists are skipped; everything else is added.
+- `utils/` — JSON parsing (`validators.py`), document preview text (`formatters.py`) and file reading (`files.py`).
+- Tests for the above in `tests/test_connection.py`, `test_validators.py`, `test_formatters.py`, `test_files.py` and `test_document_view.py`.
+
+### Changed
+- `gui/views/collection_view.py` — collection buttons are no longer disabled; clicking one opens its documents.
+- `gui/app.py` — routes from the collection list to the new document screen.
+
 ## 2026-10-27
 
 ### Added
