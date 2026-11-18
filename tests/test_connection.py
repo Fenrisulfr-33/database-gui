@@ -235,3 +235,185 @@ def test_rename_database_rejects_invalid_name(target_name: str) -> None:
 
     with pytest.raises(ValueError, match="valid|64 bytes"):
         service.rename_database("source", target_name)
+
+
+# documents
+
+@pytest.fixture
+def mongo_service(monkeypatch: pytest.MonkeyPatch) -> connection.MongoConnection:
+    """A connected MongoConnection that uses mongomock."""
+    fake_client = mongomock.MongoClient()
+    monkeypatch.setattr(connection, "MongoClient",
+                        lambda *args, **kwargs: fake_client)
+    service = connection.MongoConnection("mongodb://cluster.example")
+    service.connect("alex", "secret")
+    return service
+
+
+def test_list_documents_returns_empty_list_for_empty_collection(
+    mongo_service: connection.MongoConnection,
+) -> None:
+    assert mongo_service.list_documents("shop", "items") == []
+
+
+def test_list_documents_requires_connection() -> None:
+    service = connection.MongoConnection("mongodb://cluster.example")
+
+    with pytest.raises(ValueError, match="Connect to a MongoDB cluster"):
+        service.list_documents("shop", "items")
+
+
+def test_list_documents_is_capped_and_newest_first(
+    mongo_service: connection.MongoConnection,
+) -> None:
+    for number in range(connection.DOCUMENT_LIST_LIMIT + 5):
+        mongo_service.add_document("shop", "items", {"_id": number})
+
+    documents = mongo_service.list_documents("shop", "items")
+
+    assert len(documents) == connection.DOCUMENT_LIST_LIMIT
+    assert documents[0]["_id"] == connection.DOCUMENT_LIST_LIMIT + 4
+
+
+def test_add_document_inserts_and_returns_updated_list(
+    mongo_service: connection.MongoConnection,
+) -> None:
+    documents = mongo_service.add_document("shop", "items", {"name": "pen"})
+
+    assert [doc["name"] for doc in documents] == ["pen"]
+    assert "_id" in documents[0]  # MongoDB assigned one
+
+
+def test_add_document_allows_identical_content_with_different_id(
+    mongo_service: connection.MongoConnection,
+) -> None:
+    mongo_service.add_document("shop", "items", {"_id": 1, "name": "pen"})
+
+    documents = mongo_service.add_document(
+        "shop", "items", {"_id": 2, "name": "pen"})
+
+    assert len(documents) == 2
+
+
+def test_add_document_allows_same_name_with_different_content(
+    mongo_service: connection.MongoConnection,
+) -> None:
+    mongo_service.add_document("shop", "items", {"name": "pen", "color": "blue"})
+
+    documents = mongo_service.add_document(
+        "shop", "items", {"name": "pen", "color": "red"})
+
+    assert len(documents) == 2
+
+
+def test_add_document_new_document_appears_in_list_immediately(
+    mongo_service: connection.MongoConnection,
+) -> None:
+    mongo_service.add_document("shop", "items", {"name": "pen"})
+
+    documents = mongo_service.add_document("shop", "items", {"name": "ink"})
+
+    assert {doc["name"] for doc in documents} == {"pen", "ink"}
+
+
+def test_add_document_only_touches_the_given_collection(
+    mongo_service: connection.MongoConnection,
+) -> None:
+    mongo_service.add_document("shop", "items", {"name": "pen"})
+
+    assert mongo_service.list_documents("shop", "orders") == []
+    assert mongo_service.list_documents("other_db", "items") == []
+
+
+def test_add_document_rejects_duplicate_id(
+    mongo_service: connection.MongoConnection,
+) -> None:
+    mongo_service.add_document("shop", "items", {"_id": 1})
+
+    with pytest.raises(ValueError, match="already exists"):
+        mongo_service.add_document("shop", "items", {"_id": 1})
+
+
+def test_add_document_rejects_non_dict(
+    mongo_service: connection.MongoConnection,
+) -> None:
+    with pytest.raises(ValueError, match="JSON object"):
+        mongo_service.add_document("shop", "items", ["not", "a", "dict"])  # type: ignore[arg-type]
+
+
+def test_add_document_requires_connection() -> None:
+    service = connection.MongoConnection("mongodb://cluster.example")
+
+    with pytest.raises(ValueError, match="Connect to a MongoDB cluster"):
+        service.add_document("shop", "items", {"name": "pen"})
+
+
+# importing many documents
+
+
+def test_add_documents_inserts_all_and_returns_result(
+    mongo_service: connection.MongoConnection,
+) -> None:
+    result = mongo_service.add_documents(
+        "shop", "items", [{"name": "pen"}, {"name": "ink"}])
+
+    assert (result.inserted, result.skipped) == (2, 0)
+    assert {doc["name"] for doc in result.documents} == {"pen", "ink"}
+
+
+def test_add_documents_skips_duplicates_but_keeps_the_rest(
+    mongo_service: connection.MongoConnection,
+) -> None:
+    mongo_service.add_document("shop", "items", {"_id": 1})
+
+    result = mongo_service.add_documents(
+        "shop", "items", [{"_id": 1}, {"_id": 2}, {"_id": 3}])
+
+    assert (result.inserted, result.skipped) == (2, 1)
+    assert sorted(doc["_id"] for doc in result.documents) == [1, 2, 3]
+
+
+def test_add_documents_keeps_identical_content_with_different_ids(
+    mongo_service: connection.MongoConnection,
+) -> None:
+    mongo_service.add_document("shop", "items", {"name": "pen"})
+
+    result = mongo_service.add_documents(
+        "shop", "items", [
+            {"_id": 10, "name": "pen"},
+            {"_id": 11, "name": "ink"},
+            {"_id": 12, "name": "ink"},
+        ])
+
+    assert (result.inserted, result.skipped) == (3, 0)
+    assert len(result.documents) == 4
+
+
+def test_add_documents_rejects_items_that_are_not_objects(
+    mongo_service: connection.MongoConnection,
+) -> None:
+    with pytest.raises(ValueError, match="JSON object"):
+        mongo_service.add_documents("shop", "items", [{"a": 1}, 5])  # type: ignore[list-item]
+
+
+def test_add_documents_raises_when_every_document_is_rejected(
+    mongo_service: connection.MongoConnection,
+) -> None:
+    mongo_service.add_document("shop", "items", {"_id": 1})
+
+    with pytest.raises(ValueError, match="No documents were added"):
+        mongo_service.add_documents("shop", "items", [{"_id": 1}])
+
+
+def test_add_documents_rejects_empty_list(
+    mongo_service: connection.MongoConnection,
+) -> None:
+    with pytest.raises(ValueError, match="no documents"):
+        mongo_service.add_documents("shop", "items", [])
+
+
+def test_add_documents_requires_connection() -> None:
+    service = connection.MongoConnection("mongodb://cluster.example")
+
+    with pytest.raises(ValueError, match="Connect to a MongoDB cluster"):
+        service.add_documents("shop", "items", [{"a": 1}])

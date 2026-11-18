@@ -10,7 +10,10 @@ from bson import BSON
 from bson.codec_options import CodecOptions
 from pymongo import IndexModel, MongoClient
 from pymongo.database import Database
-from pymongo.errors import PyMongoError
+from pymongo.errors import BulkWriteError, DuplicateKeyError, PyMongoError
+
+# the document list is drawn in the GUI, so don't load a whole big collection
+DOCUMENT_LIST_LIMIT = 100
 
 
 @dataclass
@@ -21,6 +24,15 @@ class _RenameOperation:
     archive_path: str
     manifest: dict | None = None
     preserve_archive: bool = False
+
+
+@dataclass
+class ImportResult:
+    """Result of an import: counts plus the updated list."""
+
+    inserted: int
+    skipped: int
+    documents: list[dict]
 
 
 class MongoConnection:
@@ -97,6 +109,63 @@ class MongoConnection:
         return sorted(
             self._require_client()[database_name].list_collection_names()
         )
+
+    def list_documents(
+        self, database_name: str, collection_name: str
+    ) -> list[dict]:
+        """Return the newest documents in a collection (max 100)."""
+        collection = self._require_client()[database_name][collection_name]
+        cursor = collection.find().sort("_id", -1).limit(DOCUMENT_LIST_LIMIT)
+        return list(cursor)
+
+    def add_document(
+        self, database_name: str, collection_name: str, document: dict
+    ) -> list[dict]:
+        """Insert one document and return the updated list."""
+        client = self._require_client()
+        if not isinstance(document, dict):
+            raise ValueError("A document must be a JSON object.")
+
+        collection = client[database_name][collection_name]
+        try:
+            collection.insert_one(document)
+        except DuplicateKeyError as error:
+            raise ValueError(
+                "A document with that _id already exists.") from error
+        return self.list_documents(database_name, collection_name)
+
+    def add_documents(
+        self, database_name: str, collection_name: str, documents: list[dict]
+    ) -> "ImportResult":
+        """Insert many documents, skipping any that get rejected."""
+        client = self._require_client()
+        if not documents:
+            raise ValueError("There are no documents to add.")
+        if not all(isinstance(document, dict) for document in documents):
+            raise ValueError("Every document must be a JSON object.")
+        collection = client[database_name][collection_name]
+        inserted = self._insert_many(collection, documents)
+        return ImportResult(
+            inserted=inserted,
+            skipped=len(documents) - inserted,
+            documents=self.list_documents(database_name, collection_name),
+        )
+
+    @staticmethod
+    def _insert_many(collection, documents: list[dict]) -> int:
+        """Return how many documents were inserted, even if some failed."""
+        try:
+            result = collection.insert_many(documents, ordered=False)
+        except BulkWriteError as error:
+            inserted = error.details.get("nInserted", 0)
+            if inserted == 0:
+                raise ValueError(
+                    "No documents were added. Each one was rejected, "
+                    "for example because its _id already exists."
+                ) from error
+            return inserted
+        return len(result.inserted_ids)
+
 
     def get_database_size(self, database_name: str) -> int | None:
         """Return an approximate database data-and-index size in bytes."""
@@ -641,4 +710,4 @@ class MongoConnection:
         return True
 
 
-__all__ = ["MongoConnection", "PyMongoError"]
+__all__ = ["ImportResult", "MongoConnection", "PyMongoError"]

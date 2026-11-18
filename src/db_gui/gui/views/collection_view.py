@@ -13,12 +13,14 @@ class CollectionView(ctk.CTkFrame):
         back,
         collections,
         create_collection,
+        open_collection,
     ) -> None:
         super().__init__(master)
         self._database_name = database
         self._back = back
         self._collections = collections
         self._create_collection = create_collection
+        self._open_collection = open_collection
         self._build_view()
         
     def _build_view(self) -> None:
@@ -58,7 +60,8 @@ class CollectionView(ctk.CTkFrame):
                 self._collections_list,
                 text=collection,
                 anchor="w",
-                state = "disabled"
+                command=lambda name=collection: self._open_collection(
+                    self._database_name, name),
             ).pack(fill="x", pady=4)
 
         if not collections:
