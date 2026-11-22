@@ -4,6 +4,7 @@ Author: Archer (bumped default window size for the restyled login view;
 added the brand mark as the window icon)
 """
 
+from functools import partial
 from tkinter import messagebox
 
 import customtkinter as ctk
@@ -14,6 +15,7 @@ from .assets import BRAND_MARK, load_image
 from .views.connection_view import ConnectionView
 from .views.database_view import DatabaseView
 from .views.collection_view import CollectionView
+from .views.document_view import DocumentActions, DocumentView
 
 
 class App(ctk.CTk):
@@ -97,9 +99,25 @@ class App(ctk.CTk):
             database, 
             self._return_to_database_view,
             self._list_collections,
-            self._create_collection
+            self._create_collection,
+            self._documents_view
             )
         )
+
+    def _documents_view(self, database: str, collection: str) -> None:
+        """Open the screen for one collection."""
+        # partial fills in the database and collection names for the view
+        actions = DocumentActions(
+            back=lambda: self._collections_view(database),
+            list_documents=partial(
+                self._connection.list_documents, database, collection),
+            add_document=partial(
+                self._connection.add_document, database, collection),
+            add_documents=partial(
+                self._connection.add_documents, database, collection),
+        )
+        self._show_view(
+            DocumentView(self, f"{database}.{collection}", actions))
 
     def _create_database(
         self, database_name: str, collection_name: str
