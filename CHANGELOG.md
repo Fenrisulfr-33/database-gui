@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 ### Added
 - **Dashboard** (`gui/views/dashboard_view.py`), styled after `design/Dashboard.png`, replaces the old database home screen. It has a sidebar with a dropdown of collections for each database, a table of database stats (collections, documents, data size, storage size), a filter box, stat cards, a connection banner, a status bar, and **Create database** / **Refresh** buttons. The header is drawn but disabled except for the **Docs** link. Stats load on a background thread.
 - Styled pop-ups (`gui/widgets/form_dialog.py`) for **Create database** (database name + first collection name) and **Rename database**, matching the pop-up designs in `design/`.
+- In-app message pop-ups (`gui/widgets/message_dialog.py`), matching `design/Rename confirm popups.png`, replace every native `tkinter.messagebox` prompt (rename confirm, rename result/failure, "Cluster not saved"). Shared pop-up behavior (dimmed backdrop, centering, modal grab) lives in `gui/widgets/modal.py`.
 - Styled `···` database feature menu (`gui/widgets/feature_menu.py`), matching `design/Database features.png`: pencil icon for Rename, green hover highlight, divider, and Close.
 - **Remember me** on the login screen now saves successful logins to `~/.db_gui/saved_clusters.json` (`utils/saved_clusters.py`), with an optional cluster name and a dropdown to pick a saved cluster. Passwords are stored in plain text for now.
 - `db/connection.py`: `list_database_stats()`, `get_database_stats()` and `get_cluster_status()`.

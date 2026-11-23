@@ -97,6 +97,8 @@ Styled after `design/Create database — pop-up.png` and `design/Rename database
 
 - **Create database** asks for the **Database name** and a **First collection name**. MongoDB only keeps a database that has at least one collection, so this second field is a deliberate addition to the design. If the server refuses (for example, the name is taken), the error shows inside the pop-up and it stays open.
 - **Rename database** opens from the `···` menu with the current name filled in. Keeping the same name shows "Choose a different name." After you click Rename, the existing confirmation (local BSON archive warning) still appears before anything changes.
+- **Rename confirm + result** (styled after `design/Rename confirm popups.png`) are in-app pop-ups too, not Windows prompts. The confirm shows "Rename 'a' to 'b'?" in bold with the archive warning under it, plus **Yes** / **No**. ✕ or Esc means No. Afterwards, a result pop-up with **OK** says the rename worked. A warning version appears if the local archive couldn't be cleaned up, and an error version if the rename failed.
+- Every other message in the app (e.g. "Cluster not saved") uses the same in-app pop-up. No native `messagebox` prompts are left.
 
 ### Dashboard flow
 

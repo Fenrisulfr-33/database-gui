@@ -3,11 +3,11 @@
 Author: Archer (bumped default window size for the restyled login view;
 added the brand mark as the window icon; save remembered clusters to the
 local JSON file after a successful login; swapped the database home screen
-for the new DashboardView; rename now uses the styled FormDialog pop-up)
+for the new DashboardView; rename now uses the styled FormDialog pop-up;
+all native messagebox prompts replaced with in-app MessageDialog pop-ups)
 """
 
 from functools import partial
-from tkinter import messagebox
 
 import customtkinter as ctk
 from pymongo.errors import PyMongoError
@@ -22,6 +22,7 @@ from .views.dashboard_view import DashboardView
 from .views.collection_view import CollectionView
 from .views.document_view import DocumentActions, DocumentView
 from .widgets.form_dialog import FormDialog, FormField, FormSpec
+from .widgets.message_dialog import MessageSpec, show_dialog
 
 
 class App(ctk.CTk):
@@ -108,7 +109,8 @@ class App(ctk.CTk):
         try:
             save_cluster(entry)
         except ValueError as error:
-            messagebox.showwarning("Cluster not saved", str(error), parent=self)
+            show_dialog(self, MessageSpec("Cluster not saved", str(error),
+                                          "warning"))
             
     def _show_dashboard(self) -> None:
         """Show the dashboard for the current connection.
@@ -197,9 +199,9 @@ class App(ctk.CTk):
             return
         connection = self._connection
         if connection is None:
-            messagebox.showerror(
-                "Not connected", "Connect to a cluster before renaming.", parent=self
-            )
+            show_dialog(self, MessageSpec(
+                "Not connected", "Connect to a cluster before renaming.",
+                "error"))
             return
         if not self._confirm_database_rename(connection, source_name, target_name):
             return
@@ -237,19 +239,25 @@ class App(ctk.CTk):
         source_name: str,
         target_name: str,
     ) -> bool:
+        """Styled Yes/No confirm (design/Rename confirm popups.png).
+
+        Author: Archer (in-app pop-up replaces messagebox.askyesno; the
+        first line of the warning becomes the bold heading)
+        """
         estimate = connection.get_database_size(source_name)
         warning = self._build_rename_warning(source_name, target_name, estimate)
-        return messagebox.askyesno("Confirm database rename", warning, parent=self)
+        heading, _, details = warning.partition("\n\n")
+        return show_dialog(self, MessageSpec(
+            "Confirm database rename", details, "question", heading))
 
     def _report_rename_failure(
         self, connection: MongoConnection, error: Exception
     ) -> None:
-        messagebox.showerror(
+        show_dialog(self, MessageSpec(
             "Database rename failed",
             f"{error}\n\nCheck the cluster state before retrying. If the "
             "message includes a local recovery archive path, keep that file.",
-            parent=self,
-        )
+            "error"))
         # The dashboard shows its own error if the cluster can't be read.
         self._show_dashboard()
 
@@ -266,20 +274,21 @@ class App(ctk.CTk):
     def _show_rename_outcome(
         self, source_name: str, target_name: str, archive_path: str | None
     ) -> None:
+        """Styled result pop-up (design/Rename confirm popups.png).
+
+        Author: Archer (in-app pop-up replaces messagebox)
+        """
         if archive_path is None:
-            messagebox.showinfo(
+            show_dialog(self, MessageSpec(
                 "Database renamed",
                 f"'{source_name}' was saved to a local BSON archive, verified, "
-                f"and restored as '{target_name}'. The original was removed.",
-                parent=self,
-            )
+                f"and restored as '{target_name}'. The original was removed."))
         else:
-            messagebox.showwarning(
+            show_dialog(self, MessageSpec(
                 "Database renamed; local cleanup needed",
                 f"'{source_name}' was restored as '{target_name}', but the "
                 f"temporary local archive could not be removed:\n{archive_path}",
-                parent=self,
-            )
+                "warning"))
 
     @staticmethod
     def _build_rename_warning(

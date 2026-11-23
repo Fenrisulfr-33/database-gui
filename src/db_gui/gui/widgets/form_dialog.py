@@ -5,7 +5,8 @@ Author: Archer
 
 Layout: title + × close, subtitle, one or more labeled text boxes (each with
 a hint under it), an error line, then Cancel and a primary button. The window
-behind is dimmed by a see-through "scrim" while the pop-up is open.
+behind is dimmed while the pop-up is open (see modal.py, shared with
+MessageDialog).
 
 Two ways to use it:
 - on_submit(values) -> error text or None. Returning text keeps the pop-up
@@ -22,9 +23,9 @@ import customtkinter as ctk
 
 from ..theme import get_color, get_font
 from .labels import make_label
+from .modal import ModalCard
 
-DIALOG_WIDTH = 520
-SCRIM_ALPHA = 0.6
+DIALOG_WIDTH = ModalCard.WIDTH
 
 
 @dataclass
@@ -47,33 +48,21 @@ class FormSpec:
     fields: list[FormField] = field(default_factory=list)
 
 
-class FormDialog(ctk.CTkToplevel):
-    """Modal pop-up with a dimmed backdrop."""
+class FormDialog(ModalCard):
+    """Modal pop-up form with a dimmed backdrop."""
 
     def __init__(self, master, spec: FormSpec,
                  on_submit: Callable[[list[str]], str | None] | None = None):
-        """Author: Archer"""
-        super().__init__(master, fg_color=get_color("surface/card"))
+        """Author: Archer (shared pop-up behavior moved to ModalCard)"""
+        super().__init__(master)
         self._spec = spec
         self._on_submit = on_submit or (lambda _values: None)
         self.values: list[str] | None = None
-        self._scrim = _make_scrim(master.winfo_toplevel())
-        if self._scrim is not None:
-            # Clicking the dimmed area must never cover the pop-up.
-            self._scrim.bind("<Button-1>", lambda _event: self.lift())
-        self.overrideredirect(True)  # the card draws its own title + ×
-        # A Toplevel ignores border_width, so draw the 1px border with Tk's
-        # highlight ring instead.
-        border = get_color("border/default")
-        self.configure(highlightthickness=1, highlightbackground=border,
-                       highlightcolor=border)
         self._entries = self._build_form()
         self._build_buttons()
         self.bind("<Return>", lambda _event: self.submit())
         self.bind("<Escape>", lambda _event: self.cancel())
-        self._place_over(master.winfo_toplevel())
-        # grab_set fails until the window is actually shown, so wait a bit.
-        self.after(100, self._make_modal)
+        self.finish_setup(self._entries[0] if self._entries else None)
 
     def _build_form(self) -> list[ctk.CTkEntry]:
         """Title row, subtitle, fields, and the (hidden) error line.
@@ -146,32 +135,6 @@ class FormDialog(ctk.CTkToplevel):
             text_color=get_color("text/primary"), **common,
         ).pack(side="right", padx=(0, 12))
 
-    def _place_over(self, window) -> None:
-        """Center the pop-up over the main window.
-
-        Author: Archer
-        """
-        self.update_idletasks()
-        height = self.winfo_reqheight()
-        x = window.winfo_rootx() + (window.winfo_width() - DIALOG_WIDTH) // 2
-        y = window.winfo_rooty() + (window.winfo_height() - height) // 2
-        self.geometry(f"{DIALOG_WIDTH}x{height}+{max(x, 0)}+{max(y, 0)}")
-
-    def _make_modal(self) -> None:
-        """Block clicks behind the pop-up and focus the first text box.
-
-        Author: Archer
-        """
-        if not self.winfo_exists():
-            return
-        self.lift()
-        try:
-            self.grab_set()
-        except tk.TclError:
-            pass  # another window already holds the grab; still usable
-        if self._entries:
-            self._entries[0].focus_set()
-
     def show_error(self, message: str) -> None:
         """Show an error inside the pop-up, under the fields.
 
@@ -202,12 +165,6 @@ class FormDialog(ctk.CTkToplevel):
         self.values = None
         self.close()
 
-    def close(self) -> None:
-        """Remove the pop-up and its dimmed backdrop. Author: Archer"""
-        if self._scrim is not None:
-            self._scrim.destroy()
-        self.destroy()
-
     def wait_for_values(self) -> list[str] | None:
         """Block until the pop-up closes; return the values or None.
 
@@ -216,22 +173,3 @@ class FormDialog(ctk.CTkToplevel):
         self.wait_window()
         return self.values
 
-
-def _make_scrim(window) -> tk.Toplevel | None:
-    """A borderless, see-through dark window over `window` to dim it.
-
-    Returns None where the platform doesn't support transparency.
-
-    Author: Archer
-    """
-    window.update_idletasks()
-    scrim = tk.Toplevel(window, background=get_color("overlay/scrim"))
-    scrim.overrideredirect(True)
-    scrim.geometry(f"{window.winfo_width()}x{window.winfo_height()}"
-                   f"+{window.winfo_rootx()}+{window.winfo_rooty()}")
-    try:
-        scrim.attributes("-alpha", SCRIM_ALPHA)
-    except tk.TclError:
-        scrim.destroy()
-        return None
-    return scrim
