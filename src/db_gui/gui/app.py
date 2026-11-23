@@ -1,7 +1,8 @@
 """Root application window and view routing.
 
 Author: Archer (bumped default window size for the restyled login view;
-added the brand mark as the window icon)
+added the brand mark as the window icon; save remembered clusters to the
+local JSON file after a successful login)
 """
 
 from functools import partial
@@ -11,6 +12,8 @@ import customtkinter as ctk
 from pymongo.errors import PyMongoError
 
 from ..db.connection import MongoConnection
+from ..utils.saved_clusters import (SavedCluster, load_saved_clusters,
+                                    save_cluster)
 from .assets import BRAND_MARK, load_image
 from .views.connection_view import ConnectionView
 from .views.database_view import DatabaseView
@@ -29,8 +32,9 @@ class App(ctk.CTk):
 
         self.title("Arrow_>")
         self._set_window_icon()
-        # Tall enough for the login card (design/Login.png) without clipping.
-        self.geometry("1100x820")
+        # Tall enough for the login card (design/Login.png) plus the
+        # saved-cluster picker and cluster-name box without clipping.
+        self.geometry("1100x940")
         self.minsize(600, 400)
         self._connection: MongoConnection | None = None
         self._current_view = None
@@ -51,9 +55,15 @@ class App(ctk.CTk):
         self._iconbitmap_method_called = True
 
     def _build_layout(self) -> None:
-        self._show_view(
-            ConnectionView(self, self._connect_to_cluster)
-        )
+        self._show_login()
+
+    def _show_login(self) -> None:
+        """Show the login screen with the latest saved clusters.
+
+        Author: Archer
+        """
+        self._show_view(ConnectionView(
+            self, self._connect_to_cluster, load_saved_clusters()))
 
     def _show_view(self, view) -> None:
         if self._current_view is not None:
@@ -61,10 +71,14 @@ class App(ctk.CTk):
         self._current_view = view
         view.pack(expand=True, fill="both")
 
-    def _connect_to_cluster(self, uri: str, username: str, password: str) -> None:
+    def _connect_to_cluster(self, entry: SavedCluster, remember: bool) -> None:
+        """Try the login; on success, save it (if remember) and go on.
+
+        Author: Archer (takes a SavedCluster + remember-me flag)
+        """
         try:
-            connection = MongoConnection(uri)
-            databases = connection.connect(username, password)
+            connection = MongoConnection(entry.cluster)
+            databases = connection.connect(entry.username, entry.password)
         except ValueError as error:
             self._current_view.show_error(str(error))
         except PyMongoError:
@@ -73,7 +87,21 @@ class App(ctk.CTk):
             )
         else:
             self._connection = connection
+            # Only remember logins that worked, and only when asked to.
+            if remember:
+                self._remember_cluster(entry)
             self._database_view(databases)
+
+    def _remember_cluster(self, entry: SavedCluster) -> None:
+        """Save the login to the local JSON file; warn (but carry on) if
+        the file can't be written.
+
+        Author: Archer
+        """
+        try:
+            save_cluster(entry)
+        except ValueError as error:
+            messagebox.showwarning("Cluster not saved", str(error), parent=self)
             
     def _database_view(
         self, databases: list[str]
@@ -131,7 +159,7 @@ class App(ctk.CTk):
         if self._connection is not None:
             self._connection.close()
             self._connection = None
-        self._show_view(ConnectionView(self, self._connect_to_cluster))
+        self._show_login()
 
     def _list_collections(
             self, database_name
