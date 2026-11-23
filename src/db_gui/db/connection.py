@@ -3,6 +3,7 @@
 import hashlib
 import os
 import tempfile
+import time
 from dataclasses import dataclass
 from typing import BinaryIO
 
@@ -33,6 +34,36 @@ class ImportResult:
     inserted: int
     skipped: int
     documents: list[dict]
+
+
+@dataclass
+class DatabaseStats:
+    """Numbers for one database row on the dashboard.
+
+    Author: Archer
+
+    A value is None when the server would not report it (for example the
+    user lacks permission to run dbStats on that database).
+    """
+
+    name: str
+    collections: int | None = None
+    documents: int | None = None
+    data_size: int | None = None
+    storage_size: int | None = None
+
+
+@dataclass
+class ClusterStatus:
+    """Connection facts for the dashboard banner and status bar.
+
+    Author: Archer
+    """
+
+    host: str
+    ping_ms: int | None = None
+    version: str | None = None
+    replica_set: str | None = None
 
 
 class MongoConnection:
@@ -180,6 +211,51 @@ class MongoConnection:
         if data_size is None or index_size is None:
             return None
         return int(data_size + index_size)
+
+    def list_database_stats(self) -> list[DatabaseStats]:
+        """Return dashboard stats for every visible database, sorted by name.
+
+        Author: Archer
+        """
+        return [self.get_database_stats(name) for name in self.list_databases()]
+
+    def get_database_stats(self, database_name: str) -> DatabaseStats:
+        """Run dbStats for one database; missing numbers become None.
+
+        Author: Archer
+
+        storage_size includes indexes so it matches the dashboard footnote
+        "Sizes include data and indexes".
+        """
+        try:
+            stats = self._require_client().get_database(database_name).command(
+                "dbStats")
+        except PyMongoError:
+            return DatabaseStats(database_name)
+        storage = stats.get("storageSize")
+        if storage is not None:
+            storage += stats.get("indexSize", 0)
+        return DatabaseStats(
+            database_name, _as_int(stats.get("collections")),
+            _as_int(stats.get("objects")), _as_int(stats.get("dataSize")),
+            _as_int(storage))
+
+    def get_cluster_status(self) -> ClusterStatus:
+        """Ping the cluster and read its version and replica set name.
+
+        Author: Archer
+        """
+        client = self._require_client()
+        status = ClusterStatus(host=_host_from_uri(self._uri))
+        try:
+            started = time.perf_counter()
+            client.admin.command("ping")
+            status.ping_ms = round((time.perf_counter() - started) * 1000)
+            status.version = client.server_info().get("version")
+            status.replica_set = client.admin.command("hello").get("setName")
+        except PyMongoError:
+            pass  # keep whatever was filled in before the failure
+        return status
 
     def rename_database(self, source_name: str, target_name: str) -> str | None:
         """Stage a local BSON archive, then replace the source database.
@@ -711,3 +787,23 @@ class MongoConnection:
 
 
 __all__ = ["ImportResult", "MongoConnection", "PyMongoError"]
+
+
+def _as_int(value) -> int | None:
+    """Turn a dbStats number (may be float) into an int, keeping None.
+
+    Author: Archer
+    """
+    return None if value is None else int(value)
+
+
+def _host_from_uri(uri: str) -> str:
+    """Return just the host part of a connection string for display.
+
+    "mongodb+srv://user:pw@cluster0.abc.mongodb.net/?x=1" -> "cluster0.abc.mongodb.net"
+
+    Author: Archer
+    """
+    host = uri.split("://", 1)[-1]
+    host = host.rsplit("@", 1)[-1]  # drop any user:password@
+    return host.split("/", 1)[0].split("?", 1)[0]

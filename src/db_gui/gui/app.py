@@ -2,7 +2,8 @@
 
 Author: Archer (bumped default window size for the restyled login view;
 added the brand mark as the window icon; save remembered clusters to the
-local JSON file after a successful login)
+local JSON file after a successful login; swapped the database home screen
+for the new DashboardView; rename now uses the styled FormDialog pop-up)
 """
 
 from functools import partial
@@ -16,9 +17,11 @@ from ..utils.saved_clusters import (SavedCluster, load_saved_clusters,
                                     save_cluster)
 from .assets import BRAND_MARK, load_image
 from .views.connection_view import ConnectionView
-from .views.database_view import DatabaseView
+from .views.dashboard_actions import DashboardActions
+from .views.dashboard_view import DashboardView
 from .views.collection_view import CollectionView
 from .views.document_view import DocumentActions, DocumentView
+from .widgets.form_dialog import FormDialog, FormField, FormSpec
 
 
 class App(ctk.CTk):
@@ -34,9 +37,12 @@ class App(ctk.CTk):
         self._set_window_icon()
         # Tall enough for the login card (design/Login.png) plus the
         # saved-cluster picker and cluster-name box without clipping.
-        self.geometry("1100x940")
+        # Wide enough for the dashboard table (design/Dashboard.png).
+        self.geometry("1280x940")
         self.minsize(600, 400)
         self._connection: MongoConnection | None = None
+        # The login that's currently connected (names shown on the dashboard).
+        self._login: SavedCluster | None = None
         self._current_view = None
 
         self._build_layout()
@@ -78,7 +84,7 @@ class App(ctk.CTk):
         """
         try:
             connection = MongoConnection(entry.cluster)
-            databases = connection.connect(entry.username, entry.password)
+            connection.connect(entry.username, entry.password)
         except ValueError as error:
             self._current_view.show_error(str(error))
         except PyMongoError:
@@ -87,10 +93,11 @@ class App(ctk.CTk):
             )
         else:
             self._connection = connection
+            self._login = entry
             # Only remember logins that worked, and only when asked to.
             if remember:
                 self._remember_cluster(entry)
-            self._database_view(databases)
+            self._show_dashboard()
 
     def _remember_cluster(self, entry: SavedCluster) -> None:
         """Save the login to the local JSON file; warn (but carry on) if
@@ -103,19 +110,23 @@ class App(ctk.CTk):
         except ValueError as error:
             messagebox.showwarning("Cluster not saved", str(error), parent=self)
             
-    def _database_view(
-        self, databases: list[str]
-    ) -> None:
-        self._show_view(
-            DatabaseView(
-                self,
-                databases,
-                self._create_database,
-                self._disconnect,
-                self._collections_view,
-                self._rename_database,
-            )
+    def _show_dashboard(self) -> None:
+        """Show the dashboard for the current connection.
+
+        Author: Archer
+        """
+        connection = self._connection
+        actions = DashboardActions(
+            load_databases=connection.list_database_stats,
+            load_status=connection.get_cluster_status,
+            list_collections=connection.list_collections,
+            open_database=self._collections_view,
+            open_collection=self._documents_view,
+            create_database=self._create_database,
+            rename_database=self._rename_database,
+            disconnect=self._disconnect,
         )
+        self._show_view(DashboardView(self, self._login, actions))
         
     def _collections_view(
         self, 
@@ -159,6 +170,7 @@ class App(ctk.CTk):
         if self._connection is not None:
             self._connection.close()
             self._connection = None
+        self._login = None
         self._show_login()
 
     def _list_collections(
@@ -169,8 +181,7 @@ class App(ctk.CTk):
     def _return_to_database_view(
         self,
     ) -> None:
-        databases = self._connection.list_databases()
-        self._database_view(databases)
+        self._show_dashboard()
             
     def _create_collection(
         self, database_name: str, collection_name: str
@@ -202,20 +213,23 @@ class App(ctk.CTk):
         )
 
     def _prompt_database_name(self, source_name: str) -> str | None:
-        dialog = ctk.CTkInputDialog(
-            text=f"Enter a new name for '{source_name}':",
+        """Ask for the new name in the Rename database pop-up
+        (design/Rename database — pop-up.png). None = cancelled.
+
+        Author: Archer (styled pop-up replaces CTkInputDialog; empty and
+        unchanged names are caught inside the pop-up)
+        """
+        spec = FormSpec(
             title="Rename database",
-        )
-        target_name = dialog.get_input()
-        if target_name is None:
-            return None
-        target_name = target_name.strip()
-        if not target_name:
-            messagebox.showerror(
-                "Invalid name", "A database name is required.", parent=self
-            )
-            return None
-        return target_name
+            subtitle="Enter a new name for this database.",
+            submit_text="Rename",
+            fields=[FormField("New database name", "",
+                              "Choose a unique name for this connection.",
+                              initial=source_name)])
+        dialog = FormDialog(self, spec, lambda values: (
+            "Choose a different name." if values[0] == source_name else None))
+        values = dialog.wait_for_values()
+        return values[0] if values else None
 
     def _confirm_database_rename(
         self,
@@ -236,15 +250,8 @@ class App(ctk.CTk):
             "message includes a local recovery archive path, keep that file.",
             parent=self,
         )
-        try:
-            self._database_view(connection.list_databases())
-        except PyMongoError:
-            messagebox.showwarning(
-                "Database list unavailable",
-                "The database list could not be refreshed. Reconnect to "
-                "check the cluster state.",
-                parent=self,
-            )
+        # The dashboard shows its own error if the cluster can't be read.
+        self._show_dashboard()
 
     def _report_rename_success(
         self,
@@ -253,16 +260,7 @@ class App(ctk.CTk):
         target_name: str,
         archive_path: str | None,
     ) -> None:
-        try:
-            self._database_view(connection.list_databases())
-        except PyMongoError:
-            messagebox.showwarning(
-                "Database renamed",
-                "The rename succeeded, but the database list could not be "
-                "refreshed. Reconnect to see the updated list.",
-                parent=self,
-            )
-            return
+        self._show_dashboard()
         self._show_rename_outcome(source_name, target_name, archive_path)
 
     def _show_rename_outcome(

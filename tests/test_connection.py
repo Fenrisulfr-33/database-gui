@@ -417,3 +417,85 @@ def test_add_documents_requires_connection() -> None:
 
     with pytest.raises(ValueError, match="Connect to a MongoDB cluster"):
         service.add_documents("shop", "items", [{"a": 1}])
+
+
+# --- dashboard stats (Author: Archer) ---
+
+class _StatsDatabase:
+    """Stands in for a pymongo Database that answers dbStats."""
+
+    def __init__(self, stats):
+        self._stats = stats
+
+    def command(self, name):
+        if isinstance(self._stats, Exception):
+            raise self._stats
+        return self._stats
+
+
+class _StatsClient:
+    def __init__(self, stats_by_name):
+        self._stats_by_name = stats_by_name
+
+    def list_database_names(self):
+        return list(self._stats_by_name)
+
+    def get_database(self, name):
+        return _StatsDatabase(self._stats_by_name[name])
+
+
+def _stats_service(stats_by_name) -> connection.MongoConnection:
+    service = connection.MongoConnection("mongodb+srv://u:p@c0.example.net/?x=1")
+    service._client = _StatsClient(stats_by_name)
+    return service
+
+
+def test_get_database_stats_reads_db_stats_and_adds_indexes() -> None:
+    service = _stats_service({"shop": {
+        "collections": 3, "objects": 10.0, "dataSize": 500.0,
+        "storageSize": 800.0, "indexSize": 200.0}})
+
+    stats = service.get_database_stats("shop")
+
+    assert stats == connection.DatabaseStats("shop", 3, 10, 500, 1000)
+
+
+def test_get_database_stats_returns_blanks_when_command_fails() -> None:
+    from pymongo.errors import OperationFailure
+    service = _stats_service({"local": OperationFailure("not authorized")})
+
+    assert service.get_database_stats("local") == connection.DatabaseStats("local")
+
+
+def test_list_database_stats_is_sorted_by_name() -> None:
+    service = _stats_service({"b": {}, "a": {}})
+
+    assert [db.name for db in service.list_database_stats()] == ["a", "b"]
+
+
+def test_host_from_uri_strips_credentials_and_options() -> None:
+    assert connection._host_from_uri(
+        "mongodb+srv://u:p@c0.example.net/?x=1") == "c0.example.net"
+    assert connection._host_from_uri("mongodb://localhost:27017") == \
+        "localhost:27017"
+
+
+def test_get_cluster_status_reports_ping_version_and_replica_set() -> None:
+    class Admin:
+        def command(self, name):
+            return {"setName": "rs0"} if name == "hello" else {"ok": 1}
+
+    class Client:
+        admin = Admin()
+
+        def server_info(self):
+            return {"version": "7.0.14"}
+
+    service = connection.MongoConnection("mongodb://c0.example.net")
+    service._client = Client()
+
+    status = service.get_cluster_status()
+
+    assert status.host == "c0.example.net"
+    assert status.ping_ms is not None
+    assert (status.version, status.replica_set) == ("7.0.14", "rs0")

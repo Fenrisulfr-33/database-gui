@@ -95,7 +95,7 @@ mongo-gui-manager/
 │       │   ├── views/               # Full-screen or full-panel views
 │       │   │   ├── __init__.py
 │       │   │   ├── connection_view.py   # Connect to a MongoDB URI
-│       │   │   ├── database_view.py     # List/create/delete databases
+│       │   │   ├── dashboard_view.py    # Home screen: databases + stats, filter, create
 │       │   │   ├── collection_view.py   # List/create/delete collections
 │       │   │   └── document_view.py     # Table + editor for documents
 │       │   │

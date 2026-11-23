@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org).
 
+## 2026-11-23
+
+### Added
+- **Dashboard** (`gui/views/dashboard_view.py`), styled after `design/Dashboard.png`, replaces the old database home screen. It has a sidebar with a dropdown of collections for each database, a table of database stats (collections, documents, data size, storage size), a filter box, stat cards, a connection banner, a status bar, and **Create database** / **Refresh** buttons. The header is drawn but disabled except for the **Docs** link. Stats load on a background thread.
+- Styled pop-ups (`gui/widgets/form_dialog.py`) for **Create database** (database name + first collection name) and **Rename database**, matching the pop-up designs in `design/`.
+- Styled `···` database feature menu (`gui/widgets/feature_menu.py`), matching `design/Database features.png`: pencil icon for Rename, green hover highlight, divider, and Close.
+- **Remember me** on the login screen now saves successful logins to `~/.db_gui/saved_clusters.json` (`utils/saved_clusters.py`), with an optional cluster name and a dropdown to pick a saved cluster. Passwords are stored in plain text for now.
+- `db/connection.py`: `list_database_stats()`, `get_database_stats()` and `get_cluster_status()`.
+- Tests: `test_dashboard_view.py`, `test_connection_view.py`, `test_saved_clusters.py`, `test_form_dialog.py`, plus new tests in `test_connection.py` and `test_formatters.py`.
+
+### Removed
+- `gui/views/database_view.py` and `tests/test_database_view.py`. The dashboard replaces that screen.
+
 ## 2026-11-17
 
 ### Added
