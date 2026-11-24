@@ -747,3 +747,32 @@ def test_add_document_reports_schema_rejection() -> None:
 
     with pytest.raises(ValueError, match="doesn't match"):
         service.add_document("shop", "people", {"name": 5})
+
+
+# --- replace_document (Author: Archer) ---
+
+
+def test_replace_document_overwrites_whole_document(
+    mongo_service: connection.MongoConnection,
+) -> None:
+    mongo_service.add_document("shop", "items", {"_id": 1, "name": "pen",
+                                                 "color": "blue"})
+
+    mongo_service.replace_document("shop", "items", {"_id": 1, "name": "ink"})
+
+    assert mongo_service.list_documents("shop", "items") == [
+        {"_id": 1, "name": "ink"}]
+
+
+def test_replace_document_requires_id(
+    mongo_service: connection.MongoConnection,
+) -> None:
+    with pytest.raises(ValueError, match="keep its _id"):
+        mongo_service.replace_document("shop", "items", {"name": "ink"})
+
+
+def test_replace_document_reports_deleted_document(
+    mongo_service: connection.MongoConnection,
+) -> None:
+    with pytest.raises(ValueError, match="no longer exists"):
+        mongo_service.replace_document("shop", "items", {"_id": 99})

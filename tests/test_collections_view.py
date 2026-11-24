@@ -7,9 +7,8 @@ import pytest
 
 tk = pytest.importorskip("tkinter")
 
-from conftest import wait_for_load  # noqa: E402
+from conftest import make_shell, wait_for_load  # noqa: E402
 from db_gui.gui.views.collections_view import CollectionsView  # noqa: E402
-from db_gui.utils.saved_clusters import SavedCluster  # noqa: E402
 
 
 @pytest.fixture
@@ -28,9 +27,8 @@ def make_view(root, make_actions):
     """Factory: a CollectionsView for "shop" with fake actions, loaded."""
     def factory(calls=None, **overrides):
         calls = calls if calls is not None else []
-        login = SavedCluster("c0.example.net", "admin", "pw", "Work")
-        view = CollectionsView(
-            root, login, (make_actions(calls, **overrides), "shop"))
+        shell = make_shell(root, make_actions(calls, **overrides))
+        view = shell.show_page(lambda s: CollectionsView(s, "shop"))
         wait_for_load(root, view)
         return view
 

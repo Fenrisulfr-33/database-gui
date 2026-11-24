@@ -42,3 +42,27 @@ def test_format_bytes_picks_unit_and_precision() -> None:
     assert formatters.format_bytes(842_600_000) == "842.6 MB"
     assert formatters.format_bytes(1_120_000_000) == "1.12 GB"
     assert formatters.format_bytes(None) == formatters.MISSING_VALUE
+
+
+# --- Author: Archer ---
+
+
+def test_format_document_pretty_indents_like_the_editor() -> None:
+    text = formatters.format_document_pretty(
+        {"_id": ObjectId("64a97a64b1fdc46c489253ef"), "first_name": "Allen"})
+
+    assert text == ('{\n  "_id": {\n    "$oid": "64a97a64b1fdc46c489253ef"\n'
+                    '  },\n  "first_name": "Allen"\n}')
+
+
+def test_format_field_text_turns_values_into_form_text() -> None:
+    import datetime
+
+    midnight = datetime.datetime(2026, 11, 23)
+    with_time = datetime.datetime(2026, 11, 23, 10, 30)
+
+    assert formatters.format_field_text(None) == ""
+    assert formatters.format_field_text(True) == "true"
+    assert formatters.format_field_text(midnight) == "2026-11-23"
+    assert formatters.format_field_text(with_time) == "2026-11-23T10:30:00"
+    assert formatters.format_field_text(12) == "12"

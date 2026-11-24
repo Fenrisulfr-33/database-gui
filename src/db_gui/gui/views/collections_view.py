@@ -8,6 +8,9 @@ breadcrumb (back to the dashboard), title, Create collection, tabs
 (Collections / Statistics - disabled for now), stat cards, filter + Name A-Z
 sort + Refresh, and the collection table. Each row's "···" menu has
 Rename collection; clicking a row opens its documents.
+
+Author note (Archer): built inside the persistent ClusterShell; create /
+rename now reload just this page and this database's sidebar collections.
 """
 
 import tkinter as tk
@@ -32,16 +35,16 @@ SORT_LABELS = {False: "⇅  Name: A–Z", True: "⇅  Name: Z–A"}
 class CollectionsView(ClusterPage):
     """Every collection in one database, with stats."""
 
-    def __init__(self, master, login, page) -> None:
-        """`page` is (actions, database_name).
+    def __init__(self, shell, database: str) -> None:
+        """`shell` is the ClusterShell; `database` is the one to show.
 
-        Author: Archer
+        Author: Archer (takes the shell instead of master/login/actions)
         """
-        actions, self.database = page
+        self.database = database
         self.selected_database = self.database  # green in the sidebar
         self._collections: list = []
         self._descending = False
-        super().__init__(master, login, actions)
+        super().__init__(shell)
 
     def _build_main(self) -> None:
         """Main area, top to bottom.
@@ -238,7 +241,7 @@ class CollectionsView(ClusterPage):
             return str(error)
         except PyMongoError:
             return "Could not create collection. Check its name and permissions."
-        self.refresh()
+        self._reload_after_change()
         return None
 
     def prompt_rename_collection(self, name: str) -> FormDialog:
@@ -270,5 +273,14 @@ class CollectionsView(ClusterPage):
             return str(error)
         except PyMongoError:
             return "Could not rename collection. Check your permissions."
-        self.refresh()
+        self._reload_after_change()
         return None
+
+    def _reload_after_change(self) -> None:
+        """After create / rename: reload this page's table and this
+        database's sidebar collections (nothing else is redrawn).
+
+        Author: Archer
+        """
+        self.sidebar.reload_collections(self.database)
+        self.refresh()

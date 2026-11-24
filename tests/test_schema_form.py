@@ -154,3 +154,30 @@ def test_hint_describes_type_and_limits(make_form) -> None:
     assert by_name(form, "age").hint() == "int · optional · min 0"
     assert by_name(form, "born").hint() == "date · optional"
     assert "generate" in by_name(form, "_id").hint()
+
+
+# --- fill (Edit page) (Author: Archer) ---
+
+
+def test_fill_shows_values_and_returns_unknown_fields(make_form) -> None:
+    form, _submits = make_form()
+
+    extra = form.fill({"_id": 1, "name": "Ada", "active": True,
+                       "born": datetime.datetime(2026, 11, 23),
+                       "tags": ["a", "b"], "nickname": "A"})
+
+    assert extra == ["nickname"]
+    assert by_name(form, "name").entry.get() == "Ada"
+    assert by_name(form, "active").entry.get() == "true"
+    assert by_name(form, "born").entry.get() == "2026-11-23"
+    assert [item.get() for item in by_name(form, "tags").items] == ["a", "b"]
+    assert form.get_document()["_id"] == 1  # locked, original type
+
+
+def test_fill_marks_wrong_types_red(make_form) -> None:
+    form, _submits = make_form()
+
+    form.fill({"_id": 1, "name": "Ada", "active": "yes", "age": "old"})
+
+    assert by_name(form, "active").error.cget("text") == "Must be true or false."
+    assert by_name(form, "age").error.cget("text") == "Must be a whole number."

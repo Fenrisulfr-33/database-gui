@@ -1,4 +1,10 @@
-"""Turn database values into text for the screen."""
+"""Turn database values into text for the screen.
+
+Author note (Archer): added format_document_pretty() (indented JSON for the
+document cards) and format_field_text() (fills the schema form when editing).
+"""
+
+from datetime import datetime
 
 from bson import json_util
 
@@ -11,6 +17,39 @@ def format_document_preview(document: dict, max_length: int = PREVIEW_MAX_LENGTH
     if len(text) <= max_length:
         return text
     return text[: max_length - 3] + "..."
+
+
+def format_document_pretty(document: dict) -> str:
+    """The document as indented, multi-line Extended JSON (2 spaces), the
+    way the JSON editor shows it. ObjectIds show as {"$oid": "..."} and
+    dates as {"$date": "..."}, which the editor can read back.
+
+    Author: Archer
+    """
+    return json_util.dumps(document, indent=2, ensure_ascii=False)
+
+
+def format_field_text(value) -> str:
+    """One stored value as the text a schema-form box should start with
+    (the reverse of utils/validators.py parse_field_value).
+
+    None -> "" (empty box), bools -> "true" / "false", dates at midnight ->
+    "YYYY-MM-DD" (with a time -> full ISO, so editing doesn't drop it),
+    everything else (text, numbers, ObjectId, Decimal128) -> str(value).
+    A value of the wrong type still comes out as text, so the form can mark
+    it red when it's checked.
+
+    Author: Archer
+    """
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, datetime):
+        if value.time() == datetime.min.time():
+            return value.strftime("%Y-%m-%d")
+        return value.isoformat()
+    return str(value)
 
 
 # Shown wherever the server didn't give us a number.

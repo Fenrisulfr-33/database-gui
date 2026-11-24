@@ -12,6 +12,10 @@ green and expanded (see select_database).
 `actions` is the dashboard's DashboardActions (see views/dashboard_actions.py).
 Author note: chevrons, refresh, and the collection table icon are now the
 design PNGs (see gui/assets.py) instead of text glyphs / canvas drawings.
+Author note (Archer): the sidebar now lives in the persistent ClusterShell, so
+it is updated in place instead of rebuilt: set_databases() only adds/removes
+databases that changed, select_database() moves the highlight, and
+reload_collections() re-reads one database's collections after a change.
 """
 
 import customtkinter as ctk
@@ -38,6 +42,8 @@ class DashboardSidebar(ctk.CTkFrame):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(4, weight=1)  # Explorer list takes spare room
         self._actions = actions
+        self.items: dict[str, ExplorerItem] = {}  # database name -> item
+        self._selected: str | None = None  # highlighted database, if any
         self._build_cluster_card(cluster_name)
         self._build_nav()
         self._build_explorer()
@@ -119,26 +125,56 @@ class DashboardSidebar(ctk.CTkFrame):
         self._host_label.configure(text=host)
 
     def set_databases(self, names: list[str]) -> None:
-        """Rebuild the Explorer with one collapsed dropdown per database.
+        """Show one dropdown per database, touching only what changed.
 
-        Author: Archer
+        Databases that are still there keep their item (and whether it's
+        expanded / its loaded collections); gone ones are removed and new
+        ones added. Same list as before = nothing is redrawn.
+
+        Author: Archer (updates in place instead of rebuilding every time)
         """
         self._count_label.configure(text=str(len(names)))
-        for child in self._explorer.winfo_children():
-            child.destroy()
-        self.items = {}
+        if list(names) == list(self.items):
+            return
+        for name in [name for name in self.items if name not in names]:
+            self.items.pop(name).destroy()
         for name in names:
-            self.items[name] = ExplorerItem(self._explorer, name, self._actions)
-            self.items[name].pack(fill="x")
+            if name not in self.items:
+                self.items[name] = ExplorerItem(
+                    self._explorer, name, self._actions)
+        # Re-pack in the new order (new items may belong in the middle).
+        self.items = {name: self.items[name] for name in names}
+        for item in self.items.values():
+            item.pack_forget()
+            item.pack(fill="x")
+        self.select_database(self._selected)
 
-    def select_database(self, name: str) -> None:
-        """Highlight `name` green and expand it (the open database).
+    def select_database(self, name: str | None) -> None:
+        """Highlight `name` green and expand it (the open database); every
+        other database loses its highlight. None = highlight nothing.
+
+        Author: Archer (also clears the previous highlight)
+        """
+        self._selected = name
+        for item_name, item in self.items.items():
+            item.set_selected(item_name == name)
+
+    def reload_collections(self, database: str) -> None:
+        """Re-read one database's collections (after create / rename).
 
         Author: Archer
         """
-        item = self.items.get(name)
+        item = self.items.get(database)
         if item is not None:
-            item.set_selected()
+            item.reload()
+
+    def reload_all_collections(self) -> None:
+        """Re-read every database's collections (Explorer refresh button).
+
+        Author: Archer
+        """
+        for item in self.items.values():
+            item.reload()
 
 
 class ExplorerItem(ctk.CTkFrame):
@@ -151,6 +187,10 @@ class ExplorerItem(ctk.CTkFrame):
         self._database = database
         self._actions = actions
         self._loaded = False
+        self._selected = False
+        # True when set_selected() opened the dropdown (not the user), so it
+        # can close it again when another database is opened.
+        self._auto_expanded = False
         self.header = ctk.CTkFrame(self, corner_radius=6,
                                    fg_color="transparent")
         self.header.pack(fill="x")
@@ -170,17 +210,30 @@ class ExplorerItem(ctk.CTkFrame):
         self.name_button.pack(side="left", fill="x", expand=True)
         self._children_frame = ctk.CTkFrame(self, fg_color="transparent")
 
-    def set_selected(self) -> None:
-        """Green highlight (design/Collections.png) and expand.
+    def set_selected(self, selected: bool = True) -> None:
+        """Green highlight + expand (design/Collections.png), or back to
+        normal. Collapses again only if the highlight was what expanded it.
 
-        Author: Archer
+        Author: Archer (can now also un-highlight, since the sidebar stays
+        on screen between pages)
         """
-        green = get_color("state/selected-nav")
-        self.header.configure(fg_color=green)
+        if selected == self._selected:
+            return
+        self._selected = selected
+        if selected:
+            fill = hover = get_color("state/selected-nav")
+            text = get_color("state/selected-text")
+        else:
+            fill, hover = "transparent", get_color("state/hover")
+            text = get_color("text/primary")
+        self.header.configure(fg_color=fill)
         for button in (self._chevron, self.name_button):
-            button.configure(fg_color=green, hover_color=green,
-                             text_color=get_color("state/selected-text"))
-        if not self.is_expanded():
+            button.configure(fg_color=fill, hover_color=hover,
+                             text_color=text)
+        if selected and not self.is_expanded():
+            self.toggle()
+            self._auto_expanded = True
+        elif not selected and self._auto_expanded and self.is_expanded():
             self.toggle()
 
     def _set_chevron(self, icon_name: str) -> None:
@@ -200,6 +253,7 @@ class ExplorerItem(ctk.CTkFrame):
 
         Author: Archer (swaps chevron icons instead of text)
         """
+        self._auto_expanded = False  # the user's choice wins from now on
         if self.is_expanded():
             self._children_frame.pack_forget()
             self._set_chevron(COLLAPSED)
@@ -208,6 +262,18 @@ class ExplorerItem(ctk.CTkFrame):
             self._load_collections()
         self._children_frame.pack(fill="x")
         self._set_chevron(EXPANDED)
+
+    def reload(self) -> None:
+        """Forget the loaded collections; re-read now if expanded, otherwise
+        the next time it's expanded.
+
+        Author: Archer
+        """
+        for child in self._children_frame.winfo_children():
+            child.destroy()
+        self._loaded = False
+        if self.is_expanded():
+            self._load_collections()
 
     def _load_collections(self) -> None:
         """Ask the cluster for this database's collections, once.

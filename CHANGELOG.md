@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com),
 and this project adheres to [Semantic Versioning](https://semver.org).
 
+## 2026-11-24
+
+### Changed
+- Moving between cluster pages (clicking a database, collection, or document, inserting a document, creating or renaming things) no longer rebuilds the whole window. The header, sidebar, and status bar now live in a new persistent `gui/views/cluster_shell.py` (`ClusterShell`), built once per login. Only the main area (the `ClusterPage`) is swapped. `gui/views/cluster_page.py` now holds only the page's main area and background loading, and the page views take the shell (`DashboardView(shell)`, `CollectionsView(shell, database)`, `DocumentView(shell, page)`, `AddDocumentView(shell, page)`).
+- The sidebar updates in place: `set_databases()` only adds or removes databases that changed, so expanded dropdowns and loaded collections are kept. `select_database()` moves the green highlight, and the new `reload_collections()` / `reload_all_collections()` re-read collections after a create or rename, or when the Explorer refresh button is clicked. Tests: `test_cluster_shell.py`.
+- Documents on the Documents page are now cards that show the whole document as indented JSON (`utils/formatters.py` `format_document_pretty()`), colored like the JSON editor in `design/Add document.png`: keys in normal text, values (strings, numbers, `true`/`false`/`null`) green, and brackets/commas grey. Each is a read-only text box that grows to fit (long values wrap) and reuses the editor's `TOKEN_PATTERN`. The text can still be selected and copied.
+
+### Added
+- **Windows .exe build**: `packaging/db_gui.spec` (PyInstaller) and `packaging/launcher.py` build a shareable `dist/arrow/` folder (no-console `arrow.exe` + `_internal/`) that bundles the icons, CustomTkinter's theme files, and dnspython (for `mongodb+srv://` URIs). `pyinstaller` was added to the `dev` extras. Build steps are in `SETUP.md`. `build/` and `dist/` are git-ignored.
+- **Edit document**: an **✎ Edit** button on each document card opens the Add document page in edit mode (`AddDocumentPage.original`; its `add_document` field is now `save_document`). The JSON editor or schema form starts with the stored document. The `_id` is locked, bad values are marked red, and fields not in the schema get a warning. **Save changes** replaces the document through the new `db/connection.py` `replace_document()`. Also added: `SchemaForm.fill()`, `utils/formatters.py` `format_field_text()`, and schema-form dates that accept a full ISO date + time. Tests were added in `test_document_view.py`, `test_add_document_view.py`, `test_schema_form.py`, `test_connection.py`, `test_formatters.py`, and `test_validators.py`.
+
 ## 2026-11-23
 
 ### Added

@@ -191,11 +191,21 @@ def _boolean(text: str) -> bool:
 
 
 def _date(text: str) -> datetime:
-    """Author: Archer"""
+    """YYYY-MM-DD, or a full ISO date + time (e.g. 2026-11-23T10:30:00) so
+    editing a stored date that has a time doesn't lose it. No time zone
+    given = UTC.
+
+    Author: Archer (also accepts full ISO date + time)
+    """
     try:
         return datetime.strptime(text, DATE_FORMAT).replace(tzinfo=timezone.utc)
     except ValueError:
+        pass
+    try:
+        value = datetime.fromisoformat(text)
+    except ValueError:
         raise ValueError("Use the format YYYY-MM-DD, e.g. 2026-11-23.") from None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
 def _object_id(text: str) -> ObjectId:

@@ -1,10 +1,12 @@
-"""Shared frame for pages inside a connected cluster (Dashboard, Collections).
+"""Base class for the pages inside a connected cluster (Dashboard,
+Collections, Documents, Add document).
 
-Author: Archer
+Author: Archer (the header, sidebar, and status bar moved to ClusterShell,
+which stays on screen; a page is now just the main area, so switching pages
+or reloading one no longer rebuilds the whole window)
 
-Draws what both designs share: header (Docs works, the rest is disabled),
-sidebar (Explorer), status bar, and an empty `self.main` area the page fills.
-Also owns background loading: `refresh()` runs the page's `load_page()` on a
+A page is created inside a ClusterShell (see cluster_shell.py) and fills its
+`self.main` area. It also owns background loading: `refresh()` runs the page's `load_page()` on a
 worker thread (MongoDB calls can be slow), then hands the result to
 `show_page()` on the Tk thread via a queue the Tk thread polls.
 
@@ -23,11 +25,7 @@ from pymongo.errors import PyMongoError
 
 from ..assets import SEARCH, make_icon_label
 from ..theme import get_color, get_font
-from ..widgets.dashboard_header import DashboardHeader
-from ..widgets.dashboard_panels import StatusBar
-from ..widgets.dashboard_sidebar import DashboardSidebar
 from ..widgets.labels import make_label
-from .dashboard_actions import DashboardActions
 
 POLL_MS = 100
 # Errors a background load can hit (ValueError = connection already closed).
@@ -35,35 +33,31 @@ LOAD_ERRORS = (PyMongoError, ValueError)
 
 
 class ClusterPage(ctk.CTkFrame):
-    """Header + sidebar + status bar around a page-specific main area."""
+    """The page-specific main area shown inside a ClusterShell."""
 
     selected_database: str | None = None
 
-    def __init__(self, master, login, actions: DashboardActions) -> None:
-        """`login` is the SavedCluster used to sign in (for names only).
+    def __init__(self, shell) -> None:
+        """`shell` is the ClusterShell this page is shown in.
 
-        Author: Archer
+        Author: Archer (built inside the shell's content area instead of
+        drawing its own header / sidebar / status bar)
         """
-        super().__init__(master, corner_radius=0,
-                         fg_color=get_color("background/app"))
-        self._actions = actions
-        self.cluster_name = login.name or login.cluster
+        super().__init__(shell.content, corner_radius=0,
+                         fg_color="transparent")
+        self.shell = shell
+        self._actions = shell.actions
+        self.cluster_name = shell.cluster_name
+        self.sidebar = shell.sidebar  # shared; lives as long as the shell
         self.loading = False
         self._refresh_button = None  # pages with a Refresh button set this
-        self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(1, weight=1)
-        DashboardHeader(self, login.username).grid(
-            row=0, column=0, columnspan=2, sticky="ew")
-        self.sidebar = DashboardSidebar(self, self.cluster_name, actions)
-        self.sidebar.grid(row=1, column=0, sticky="ns")
-        self.sidebar.refresh_button.configure(command=self.refresh)
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=1)
         self.main = ctk.CTkFrame(self, fg_color="transparent")
-        self.main.grid(row=1, column=1, padx=32, pady=(20, 12), sticky="nsew")
+        self.main.grid(row=0, column=0, padx=32, pady=(20, 12), sticky="nsew")
         self.main.grid_columnconfigure(0, weight=1)
         self._error_label = make_label(self.main, "", "error")
         self._build_main()
-        self.status_bar = StatusBar(self)
-        self.status_bar.grid(row=2, column=0, columnspan=2, sticky="ew")
         self.refresh()
 
     # ----- helpers pages use to build their main area -----
@@ -120,7 +114,8 @@ class ClusterPage(ctk.CTkFrame):
     # ----- background loading -----
 
     def refresh(self) -> None:
-        """Start reloading in the background (ignored if already loading).
+        """Start reloading this page's data in the background (ignored if
+        already loading). Only this page's widgets are redrawn afterwards.
 
         Author: Archer
         """
@@ -168,16 +163,12 @@ class ClusterPage(ctk.CTkFrame):
         self._show_loaded(*outcome)
 
     def _show_loaded(self, names: list, status, page_data) -> None:
-        """Draw the shared parts, then let the page draw its own.
+        """Update the shell's shared parts, then let the page draw its own.
 
-        Author: Archer
+        Author: Archer (the shell updates the sidebar in place)
         """
         self.clear_error()
-        self.sidebar.set_databases(names)
-        if self.selected_database:
-            self.sidebar.select_database(self.selected_database)
-        self.sidebar.set_host(status.host)
-        self.status_bar.set_status(status)
+        self.shell.show_cluster_data(names, status)
         self.show_page(page_data, status)
 
     # ----- hooks for subclasses -----

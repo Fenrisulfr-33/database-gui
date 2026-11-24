@@ -8,12 +8,19 @@ with the collection's database highlighted in the sidebar. Main area:
 - breadcrumb: <cluster> / Databases / <database> / <collection>
 - title + subtitle, Import JSON file, and "+ Add document"
 - tabs: "Documents N" and "Schema" (green underline on the active one)
-- Documents tab: filter + Refresh, the document list, "Showing X of Y"
+- Documents tab: filter + Refresh, the document cards (indented JSON +
+  Edit button), "Showing X of Y"
 - Schema tab: widgets/schema_tab.py
 
 Documents load on a background thread like the other cluster pages. Rows
 for documents that break the collection's schema are tinted red and say
 "Doesn't match schema".
+
+Author note (Archer): built inside the persistent ClusterShell, so opening
+this page or importing only redraws the main area.
+Author note (Archer): each document is a card showing the whole document as
+indented JSON colored like the JSON editor (keys normal text, values green),
+with an "✎ Edit" button that opens the Edit document page.
 """
 
 import tkinter as tk
@@ -25,10 +32,11 @@ import customtkinter as ctk
 
 from ...db.connection import DOCUMENT_LIST_LIMIT, ImportResult, PyMongoError
 from ...utils.files import read_text_file
-from ...utils.formatters import format_document_preview
+from ...utils.formatters import format_document_pretty
 from ...utils.validators import parse_documents_json
 from ..assets import REFRESH, set_icon
 from ..theme import get_color, get_font
+from ..widgets.json_editor import TOKEN_PATTERN
 from ..widgets.labels import make_button, make_label
 from ..widgets.schema_tab import SchemaActions, SchemaTab
 from .cluster_page import ClusterPage
@@ -36,6 +44,11 @@ from .cluster_page import ClusterPage
 DOCUMENTS_TAB = "Documents"
 SCHEMA_TAB = "Schema"
 BROKEN_LABEL = "⚠  Doesn't match schema"
+# Preview token colors (token names come from the JSON editor's
+# TOKEN_PATTERN): keys in normal text and every value green, as in
+# design/Add document.png. Anything else (brackets, commas) stays grey.
+PREVIEW_COLORS = {"key": "text/primary", "string": "accent/primary",
+                  "literal": "accent/primary"}
 
 
 @dataclass
@@ -57,6 +70,8 @@ class DocumentPage:
     schema: SchemaActions | None = None
     # (ids) -> set of ids that break the schema (WORKER THREAD)
     find_mismatches: Callable[[list], set] | None = None
+    # (document) -> None: opens the Edit document page; None hides Edit
+    open_edit_document: Callable[[dict], None] | None = None
 
 
 class DocumentView(ClusterPage):
@@ -65,18 +80,18 @@ class DocumentView(ClusterPage):
     Author: Archer
     """
 
-    def __init__(self, master, login, page) -> None:
-        """`page` is (actions, DocumentPage).
+    def __init__(self, shell, page: DocumentPage) -> None:
+        """`shell` is the ClusterShell; `page` says which collection.
 
-        Author: Archer
+        Author: Archer (takes the shell instead of master/login/actions)
         """
-        actions, self.page = page
+        self.page = page
         self.selected_database = self.page.database
         self._documents: list[dict] = []
         self._broken: set = set()
         self.rows: list[DocumentRow] = []
         self.tabs: dict[str, tuple] = {}
-        super().__init__(master, login, actions)
+        super().__init__(shell)
 
     def _build_main(self) -> None:
         """Main area, top to bottom.
@@ -226,13 +241,17 @@ class DocumentView(ClusterPage):
     def draw_documents(self) -> None:
         """Rebuild the rows, then re-apply the filter.
 
-        Author: Archer
+        Author: Archer (cards get an Edit button; broken ones marked red)
         """
         for row in self.rows:
             row.destroy()
-        self.rows = [DocumentRow(self.document_list, document,
-                                 document.get("_id") in self._broken)
-                     for document in self._documents]
+        self.rows = []
+        for document in self._documents:
+            row = DocumentRow(self.document_list, document,
+                              self.page.open_edit_document)
+            if document.get("_id") in self._broken:
+                row.mark_broken()
+            self.rows.append(row)
         self.apply_filter()
 
     def apply_filter(self) -> None:
@@ -351,30 +370,105 @@ class DocumentView(ClusterPage):
 
 
 class DocumentRow(ctk.CTkFrame):
-    """One document: "{ }" and a one-line preview, tinted red with
-    "Doesn't match schema" when it breaks the schema.
+    """One document as a card: the whole document as indented JSON colored
+    like the JSON editor, and "✎ Edit" in the top-right corner. Call
+    mark_broken() to tint it red with "Doesn't match schema".
+
+    Author: Archer (pretty multi-line JSON + Edit button instead of a
+    one-line preview)
+    """
+
+    def __init__(self, master, document: dict, on_edit=None) -> None:
+        """`on_edit(document)` opens the Edit page; None hides Edit.
+
+        Author: Archer
+        """
+        super().__init__(master, corner_radius=0,
+                         fg_color=get_color("surface/card"))
+        self.document = document
+        self.text = format_document_pretty(document)  # also used by filter
+        self.broken = False
+        inner = ctk.CTkFrame(self, fg_color="transparent")
+        inner.pack(fill="x", padx=16, pady=12)
+        inner.grid_columnconfigure(0, weight=1)
+        self.preview = _make_preview(inner, self.text,
+                                     get_color("surface/card"))
+        self.preview.grid(row=0, column=0, sticky="ew")
+        self._actions = ctk.CTkFrame(inner, fg_color="transparent")
+        self._actions.grid(row=0, column=1, padx=(12, 0), sticky="ne")
+        self.edit_button = None
+        if on_edit is not None:
+            self.edit_button = make_button(self._actions, "✎  Edit",
+                                           lambda: on_edit(document))
+            self.edit_button.configure(width=72, height=28, font=get_font(12))
+            self.edit_button.pack(side="right")
+        tk.Frame(self, height=1,
+                 background=get_color("border/default")).pack(fill="x")
+
+    def mark_broken(self) -> None:
+        """Red tint + "⚠ Doesn't match schema" next to Edit.
+
+        Author: Archer
+        """
+        self.broken = True
+        background = get_color("feedback/danger-subtle")
+        self.configure(fg_color=background)
+        self.preview.configure(background=background)
+        marker = make_label(self._actions, BROKEN_LABEL, "body-bold")
+        marker.configure(text_color=get_color("feedback/danger"),
+                         font=get_font(12, "bold"))
+        marker.pack(side="right", padx=(0, 12))
+
+
+def _make_preview(parent, text: str, background: str) -> tk.Text:
+    """Read-only, multi-line JSON colored like the JSON editor
+    (design/Add document.png): keys in normal text, values green, and
+    brackets / commas grey.
+
+    A tk.Text instead of a label because a label can only have one color.
+    It's disabled so it can't be typed in, but text can still be selected
+    and copied. It grows to fit every line (see _fit_height), so the
+    document list is the only thing that scrolls.
+
+    Author: Archer (multi-line, wraps long values)
+    """
+    # Plain tk.Text isn't DPI-scaled like CTk widgets, so scale the font
+    # here (negative size = pixels), same as the JSON editor does.
+    font = (get_font(13).cget("family"),
+            -round(parent._apply_widget_scaling(13)))
+    # width=1: take only the room the card gives it (the default 80
+    # characters would push the Edit button off the card).
+    preview = tk.Text(parent, height=text.count("\n") + 1, width=1,
+                      wrap="char", font=font, borderwidth=0,
+                      highlightthickness=0, takefocus=0, cursor="arrow",
+                      background=background, spacing1=2, spacing3=2,
+                      foreground=get_color("text/secondary"),
+                      selectbackground=get_color("accent/subtle"))
+    for tag, color_key in PREVIEW_COLORS.items():
+        preview.tag_configure(tag, foreground=get_color(color_key))
+    preview.insert("1.0", text)
+    for match in TOKEN_PATTERN.finditer(text):
+        preview.tag_add(match.lastgroup, f"1.0+{match.start()}c",
+                        f"1.0+{match.end()}c")
+    preview.configure(state="disabled")
+    # Long values wrap onto extra lines once the width is known.
+    preview.bind("<Configure>", lambda _event: _fit_height(preview))
+    return preview
+
+
+def _fit_height(preview: tk.Text) -> None:
+    """Make the text box exactly as tall as its wrapped lines.
 
     Author: Archer
     """
-
-    def __init__(self, master, document: dict, broken: bool) -> None:
-        background = get_color(
-            "feedback/danger-subtle" if broken else "surface/card")
-        super().__init__(master, corner_radius=0, fg_color=background)
-        self.text = format_document_preview(document)
-        self.broken = broken
-        inner = ctk.CTkFrame(self, fg_color="transparent")
-        inner.pack(fill="x", padx=16, pady=12)
-        make_label(inner, "{ }", "muted").pack(side="left", padx=(0, 14))
-        if broken:
-            marker = make_label(inner, BROKEN_LABEL, "body-bold")
-            marker.configure(text_color=get_color("feedback/danger"),
-                             font=get_font(12, "bold"))
-            marker.pack(side="right", padx=(12, 0))
-        make_label(inner, self.text, "body").pack(side="left", fill="x",
-                                                  expand=True)
-        tk.Frame(self, height=1,
-                 background=get_color("border/default")).pack(fill="x")
+    # Line breaks on screen between the first and last character, + 1.
+    breaks = preview.count("1.0", "end-1c", "displaylines")
+    # Older Pythons return a tuple (or None for 0); newer can return int.
+    if isinstance(breaks, tuple):
+        breaks = breaks[0]
+    height = (breaks or 0) + 1
+    if int(preview.cget("height")) != height:
+        preview.configure(height=height)
 
 
 def _describe_import(result: ImportResult) -> str:

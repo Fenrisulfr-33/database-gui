@@ -18,6 +18,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "mongomock>=4.1",
+    "pyinstaller>=6.0",  # builds dist/db-gui.exe, see SETUP.md
 ]
 
 # Lets teammates just type `db-gui` in the terminal to launch the app

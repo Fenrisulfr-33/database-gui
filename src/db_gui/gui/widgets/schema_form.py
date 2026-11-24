@@ -14,6 +14,9 @@ schema defines `_id` itself.
 get_document() converts every input with utils/validators.py. Anything bad
 is marked with a red border and a message under it, and nothing is returned
 until it's all fixed.
+
+Author note (Archer): fill() starts the form with a stored document's values
+for the Edit document page; the _id box is then shown but locked.
 """
 
 from collections.abc import Callable
@@ -21,6 +24,7 @@ from collections.abc import Callable
 import customtkinter as ctk
 
 from ...db.schema import SchemaField
+from ...utils.formatters import format_field_text
 from ...utils.validators import (parse_array_values, parse_field_value,
                                  parse_id_text)
 from ..theme import get_color, get_font
@@ -93,6 +97,24 @@ class SchemaForm(ctk.CTkFrame):
             raise ValueError("Fix the fields marked in red.")
         return document
 
+    def fill(self, document: dict) -> list[str]:
+        """Start each input with the document's value (Edit page), then
+        check them all so bad values are marked red straight away.
+
+        Returns the document's field names the form has no input for
+        (they'd be dropped on save; the schema doesn't allow them anyway).
+
+        Author: Archer
+        """
+        names = {field_input.field.name for field_input in self.inputs}
+        for field_input in self.inputs:
+            field_input.fill(document.get(field_input.field.name))
+        try:
+            self.get_document()
+        except ValueError:
+            pass  # the bad inputs are now marked red
+        return [name for name in document if name not in names]
+
 
 class FieldInput(ctk.CTkFrame):
     """Label + hint, the input(s) for one field, and an error line.
@@ -113,7 +135,8 @@ class FieldInput(ctk.CTkFrame):
             required = make_label(title, " *", "body-bold")
             required.configure(text_color=get_color("feedback/danger"))
             required.pack(side="left")
-        make_label(title, self.hint(), "muted").pack(side="left", padx=12)
+        self.hint_label = make_label(title, self.hint(), "muted")
+        self.hint_label.pack(side="left", padx=12)
         self.items: list[ctk.CTkEntry] = []
         self._build_input()
         self.error = make_label(self, "", "error")
@@ -205,6 +228,24 @@ class FieldInput(ctk.CTkFrame):
         self.items.remove(entry)
         row.destroy()
 
+    def fill(self, value) -> None:
+        """Show a stored value (Edit page). A value of the wrong type is
+        shown as text, so checking the form marks it red.
+
+        Author: Archer
+        """
+        if self.field.is_array:
+            items = value if isinstance(value, list) else (
+                [] if value is None else [value])
+            for item in items:
+                self.add_item(format_field_text(item))
+            return
+        text = format_field_text(value)
+        if isinstance(self.entry, ctk.CTkOptionMenu):
+            self.entry.set(text)  # any text shows; read() checks it
+        else:
+            self.entry.insert(0, text)
+
     def read(self):
         """The field's value in its type. Raises ValueError.
 
@@ -238,6 +279,8 @@ class IdInput(FieldInput):
     """
 
     skip_when_empty = True  # leave _id out so MongoDB generates one
+    _MISSING = object()  # marks "no stored _id" (None could be a real _id)
+    _locked_value = _MISSING  # set by fill(): the stored _id, kept as-is
 
     def hint(self) -> str:
         """Author: Archer"""
@@ -247,8 +290,23 @@ class IdInput(FieldInput):
         """Author: Archer"""
         return ID_PLACEHOLDER
 
+    def fill(self, value) -> None:
+        """Show the stored _id, locked: MongoDB doesn't allow changing it.
+
+        Author: Archer
+        """
+        self._locked_value = value
+        self.entry.insert(0, format_field_text(value))
+        self.entry.configure(state="disabled")
+        self.hint_label.configure(text="can't be changed")
+
     def read(self):
-        """Author: Archer"""
+        """The typed _id, or the stored one (unchanged type) when locked.
+
+        Author: Archer (returns the locked _id on the Edit page)
+        """
+        if self._locked_value is not self._MISSING:
+            return self._locked_value
         return parse_id_text(self.entry.get())
 
 

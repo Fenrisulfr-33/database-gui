@@ -216,3 +216,12 @@ def test_parse_array_values_rejects_bad_items(texts, message) -> None:
 ])
 def test_parse_id_text(text, expected) -> None:
     assert validators.parse_id_text(text) == expected
+
+
+def test_parse_field_value_date_keeps_a_full_iso_time() -> None:
+    field = SchemaField("born", "date")
+
+    value = validators.parse_field_value(field, "2026-11-23T10:30:00")
+
+    assert value == datetime.datetime(2026, 11, 23, 10, 30,
+                                      tzinfo=datetime.timezone.utc)

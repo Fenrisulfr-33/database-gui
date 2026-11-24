@@ -18,6 +18,15 @@ MongoDB still checks what gets inserted.
 The design's "Validate before insert" checkbox is replaced by a Schema info
 line: schemas are strict, so validation can't be switched off (see
 expected-behavior.md > Documents Page > Add document page).
+
+Author note (Archer): built inside the persistent ClusterShell, so opening
+this page and going back after an insert only redraws the main area.
+
+Author note (Archer): the same page is the **Edit document** page when
+AddDocumentPage.original is set (the "✎ Edit" button on a document card).
+It starts filled in with that document (JSON editor, or the schema form),
+the _id can't be changed, and "Save changes" replaces the stored document.
+Texts that differ between the two live in MODE_TEXTS.
 """
 
 import tkinter as tk
@@ -29,6 +38,7 @@ import customtkinter as ctk
 from pymongo.errors import PyMongoError
 
 from ...db.schema import UnsupportedSchemaError, parse_schema
+from ...utils.formatters import format_document_pretty
 from ..assets import TABLE, make_icon_label
 from ..theme import get_color, get_font
 from ..widgets.json_editor import JsonEditor
@@ -49,6 +59,29 @@ JSON_TYPES_TEXT = ("Use Extended JSON for ObjectId, Date, Decimal128, and "
                    "other BSON types.")
 FORM_TYPES_TEXT = ("Each field is converted to its schema type. Dates use "
                    "YYYY-MM-DD. Empty optional fields are saved as null.")
+# Texts that differ between adding (False) and editing (True) a document.
+MODE_TEXTS = {
+    False: {
+        "title": "Add document",
+        "subtitle": "Create a new document in {namespace}.",
+        "banner": "inserted when you select Insert document",
+        "button": "+  Insert document",
+        "ready": "🛡  1 document ready to insert · Changes are not yet saved",
+        "form_ready": "Fill in the fields, then select Insert document.",
+        "id_note": "Provide an _id or leave it out to generate an ObjectId "
+                   "automatically.",
+    },
+    True: {
+        "title": "Edit document",
+        "subtitle": "Change this document in {namespace}.",
+        "banner": "updated when you select Save changes",
+        "button": "✓  Save changes",
+        "ready": "🛡  Ready to save · Changes are not yet saved",
+        "form_ready": "Change the fields, then select Save changes.",
+        "id_note": "The _id can't be changed. It says which document is "
+                   "updated.",
+    },
+}
 
 
 @dataclass
@@ -60,10 +93,13 @@ class AddDocumentPage:
 
     database: str
     collection: str
-    # (document) -> list[dict]: inserts it (raises ValueError when rejected)
-    add_document: Callable[[dict], list]
+    # (document) -> saves it: inserts on Add, replaces on Edit (raises
+    # ValueError when rejected)
+    save_document: Callable[[dict], object]
     # () -> dict | None: the collection's schema (WORKER THREAD)
     get_schema: Callable[[], dict | None]
+    # The stored document being edited; None = adding a new one.
+    original: dict | None = None
 
 
 class AddDocumentView(ClusterPage):
@@ -74,14 +110,17 @@ class AddDocumentView(ClusterPage):
 
     form: SchemaForm | None = None  # set once a usable schema is found
 
-    def __init__(self, master, login, page) -> None:
-        """`page` is (actions, AddDocumentPage).
+    def __init__(self, shell, page: AddDocumentPage) -> None:
+        """`shell` is the ClusterShell; `page` says which collection.
 
-        Author: Archer
+        Author: Archer (takes the shell instead of master/login/actions;
+        picks the Add or Edit texts)
         """
-        actions, self.page = page
+        self.page = page
+        self.editing = page.original is not None
+        self.texts = MODE_TEXTS[self.editing]
         self.selected_database = self.page.database
-        super().__init__(master, login, actions)
+        super().__init__(shell)
         # On the text box itself, so it runs before Tk types a newline.
         self.editor.text.bind("<Control-Return>", self._on_shortcut)
 
@@ -104,14 +143,15 @@ class AddDocumentView(ClusterPage):
         top = ctk.CTkFrame(self.main, fg_color="transparent")
         top.grid(row=0, column=0, sticky="ew")
         self._build_breadcrumb(top)
-        make_label(top, "Add document", "title").pack(anchor="w", pady=(12, 8))
-        make_label(top, f"Create a new document in {self._namespace()}.",
-                   "subtitle").pack(anchor="w")
+        make_label(top, self.texts["title"], "title").pack(anchor="w",
+                                                           pady=(12, 8))
+        subtitle = self.texts["subtitle"].format(namespace=self._namespace())
+        make_label(top, subtitle, "subtitle").pack(anchor="w")
         back = make_button(top, "←  Back to documents", self.go_back)
         back.place(relx=1.0, rely=0.62, anchor="e")
 
     def _build_breadcrumb(self, parent) -> None:
-        """<cluster> / <database> / <collection> / Add document.
+        """<cluster> / <database> / <collection> / Add (or Edit) document.
 
         Each part but the last is a link.
 
@@ -131,7 +171,7 @@ class AddDocumentView(ClusterPage):
             link.bind("<Button-1>", lambda _event, run=command: run())
             link.pack(side="left")
             make_label(crumbs, "  /  ", "secondary").pack(side="left")
-        make_label(crumbs, "Add document", "secondary").pack(side="left")
+        make_label(crumbs, self.texts["title"], "secondary").pack(side="left")
 
     def _build_banner(self) -> None:
         """Green notice: which cluster the document goes to.
@@ -143,7 +183,7 @@ class AddDocumentView(ClusterPage):
                               border_color=get_color("accent/border"))
         banner.grid(row=1, column=0, pady=(20, 20), sticky="ew")
         text = (f"ⓘ  You are connected to {self.cluster_name}. This document "
-                "will be inserted when you select Insert document.")
+                f"will be {self.texts['banner']}.")
         label = make_label(banner, text, "body")
         label.configure(text_color=get_color("accent/primary"))
         label.pack(anchor="w", padx=16, pady=12)
@@ -159,6 +199,8 @@ class AddDocumentView(ClusterPage):
         self.content.grid_rowconfigure(0, weight=1)
         self.editor = JsonEditor(self.content, self._on_editor_change)
         self.editor.grid(row=0, column=0, padx=(0, 20), sticky="nsew")
+        if self.editing:  # start with the stored document
+            self.editor.set_text(format_document_pretty(self.page.original))
         self._build_details(self.content)
 
     def _build_details(self, parent) -> None:
@@ -177,8 +219,7 @@ class AddDocumentView(ClusterPage):
         self._build_destination(body)
         tk.Frame(body, height=1, background=get_color("border/default")).pack(
             fill="x", pady=16)
-        self._add_note(body, "Document ID", "Provide an _id or leave it out "
-                       "to generate an ObjectId automatically.")
+        self._add_note(body, "Document ID", self.texts["id_note"])
         self.types_label = self._add_note(body, "BSON data types",
                                           JSON_TYPES_TEXT)
         self.schema_label = self._add_note(body, "Schema", SCHEMA_TEXTS[None])
@@ -224,7 +265,7 @@ class AddDocumentView(ClusterPage):
         self.ready_label = make_label(footer, "", "secondary")
         self.ready_label.pack(side="left")
         self.insert_button = self.make_primary_button(
-            footer, "+  Insert document", self.insert_document)
+            footer, self.texts["button"], self.insert_document)
         self.insert_button.pack(side="right")
         make_button(footer, "Cancel", self.go_back).pack(side="right",
                                                          padx=10)
@@ -245,9 +286,8 @@ class AddDocumentView(ClusterPage):
             return
         self.insert_button.configure(
             state="normal" if is_valid else "disabled")
-        self.set_ready_text(
-            "🛡  1 document ready to insert · Changes are not yet saved"
-            if is_valid else "Fix the JSON above before inserting.")
+        self.set_ready_text(self.texts["ready"] if is_valid
+                            else "Fix the JSON above before saving.")
 
     def set_ready_text(self, text: str, is_error: bool = False) -> None:
         """Author: Archer"""
@@ -255,16 +295,17 @@ class AddDocumentView(ClusterPage):
             "feedback/danger" if is_error else "text/secondary"))
 
     def insert_document(self) -> None:
-        """Insert the typed document, then go back to the documents list.
+        """Save the typed document (insert, or replace on Edit), then go
+        back to the documents list.
 
-        Errors (bad JSON, fields marked red, duplicate _id, schema
-        rejection) stay on the page.
+        Errors (bad JSON, fields marked red, duplicate _id, changed _id,
+        schema rejection) stay on the page.
 
-        Author: Archer (reads from the form when there is one)
+        Author: Archer (reads from the form when there is one; also saves
+        edits)
         """
-        source = self.form or self.editor
         try:
-            self.page.add_document(source.get_document())
+            self.page.save_document(self._read_document())
         except ValueError as error:
             self.set_ready_text(str(error), is_error=True)
             return
@@ -274,6 +315,24 @@ class AddDocumentView(ClusterPage):
                 is_error=True)
             return
         self.go_back()
+
+    def _read_document(self) -> dict:
+        """The typed document; on Edit, with the stored _id kept.
+
+        Raises ValueError (bad input, or the _id was changed).
+
+        Author: Archer
+        """
+        document = (self.form or self.editor).get_document()
+        if not self.editing:
+            return document
+        original_id = self.page.original["_id"]
+        if "_id" in document and document["_id"] != original_id:
+            raise ValueError("The _id can't be changed. Use Add document to "
+                             "make a new document instead.")
+        # _id first, like MongoDB stores it (and if it was deleted).
+        rest = {key: value for key, value in document.items() if key != "_id"}
+        return {"_id": original_id, **rest}
 
     def _on_shortcut(self, _event=None) -> str:
         """Ctrl+Enter inserts (if the JSON is valid; the form checks itself).
@@ -334,4 +393,18 @@ class AddDocumentView(ClusterPage):
         self.types_label.configure(text=FORM_TYPES_TEXT)
         self.json_link.pack_forget()  # the form doesn't use Extended JSON
         self.insert_button.configure(state="normal")
-        self.set_ready_text("Fill in the fields, then select Insert document.")
+        self.set_ready_text(self.texts["form_ready"])
+        if self.editing:
+            self._fill_form()
+
+    def _fill_form(self) -> None:
+        """Edit page: put the stored values in the form (bad ones turn red)
+        and warn about fields the schema doesn't have.
+
+        Author: Archer
+        """
+        extra = self.form.fill(self.page.original)
+        if extra:
+            self.set_ready_text(
+                "⚠  Not in the schema, removed when saved: " + ", ".join(extra),
+                is_error=True)

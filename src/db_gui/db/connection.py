@@ -196,12 +196,32 @@ class MongoConnection:
                 "A document with that _id already exists.") from error
         except WriteError as error:
             # Author: Archer - readable error when the schema rejects it
-            if error.code == DOCUMENT_VALIDATION_FAILURE:
-                raise ValueError(
-                    "This document doesn't match the collection's schema."
-                ) from error
-            raise
+            _raise_readable_write_error(error)
         return self.list_documents(database_name, collection_name)
+
+    def replace_document(
+        self, database_name: str, collection_name: str, document: dict
+    ) -> None:
+        """Save an edited document over the stored one with the same _id.
+
+        The whole document is replaced (fields left out are removed), which
+        is what the Edit document page wants: it sends the full document.
+        Raises ValueError if it has no _id, the schema rejects it, or the
+        document was deleted in the meantime.
+
+        Author: Archer
+        """
+        if not isinstance(document, dict) or "_id" not in document:
+            raise ValueError("An edited document must keep its _id.")
+        collection = self._require_client()[database_name][collection_name]
+        try:
+            result = collection.replace_one({"_id": document["_id"]},
+                                            document)
+        except WriteError as error:
+            _raise_readable_write_error(error)
+        if result.matched_count == 0:
+            raise ValueError(
+                "This document no longer exists. It may have been deleted.")
 
     def add_documents(
         self, database_name: str, collection_name: str, documents: list[dict]
@@ -1015,3 +1035,16 @@ def _validate_collection_name(name: str) -> None:
         raise ValueError("Collection names can't contain '$' or null.")
     if name.startswith("system."):
         raise ValueError("Collection names can't start with 'system.'.")
+
+
+def _raise_readable_write_error(error: WriteError) -> None:
+    """Re-raise a write error, as a readable ValueError when it's the
+    collection's schema rejecting the document (shared by insert + edit).
+
+    Author: Archer
+    """
+    if error.code == DOCUMENT_VALIDATION_FAILURE:
+        raise ValueError(
+            "This document doesn't match the collection's schema."
+        ) from error
+    raise error

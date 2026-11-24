@@ -7,13 +7,12 @@ import pytest
 
 tk = pytest.importorskip("tkinter")
 
-from conftest import wait_for_load  # noqa: E402
+from conftest import make_shell, wait_for_load  # noqa: E402
 from db_gui.db.connection import ImportResult  # noqa: E402
 from db_gui.gui.views import document_view  # noqa: E402
 from db_gui.gui.views.document_view import (DocumentPage,  # noqa: E402
                                             DocumentView)
 from db_gui.gui.widgets.schema_tab import SchemaActions  # noqa: E402
-from db_gui.utils.saved_clusters import SavedCluster  # noqa: E402
 
 
 @pytest.fixture
@@ -46,8 +45,8 @@ def make_view(root, make_actions):
                       open_add_document=lambda: calls.append(("add",)))
         fields.update(overrides)
         page = DocumentPage("shop", "items", **fields)
-        login = SavedCluster("c0.example.net", "admin", "pw", "Work")
-        view = DocumentView(root, login, (make_actions(calls), page))
+        shell = make_shell(root, make_actions(calls))
+        view = shell.show_page(lambda s: DocumentView(s, page))
         wait_for_load(root, view)
         return view, calls
 
@@ -63,14 +62,14 @@ def schema_actions(schema=None) -> SchemaActions:
         count_mismatches=lambda _value: 0)
 
 
-def shown_texts(view) -> list[str]:
-    return [row.text for row in view.rows if row.winfo_manager()]
+def shown_documents(view) -> list[dict]:
+    return [row.document for row in view.rows if row.winfo_manager()]
 
 
 def test_page_lists_documents_and_counts_them(make_view) -> None:
     view, _calls = make_view([{"name": "pen"}, {"name": "cup"}])
 
-    assert shown_texts(view) == ['{"name": "pen"}', '{"name": "cup"}']
+    assert shown_documents(view) == [{"name": "pen"}, {"name": "cup"}]
     assert view.tabs["Documents"][0].cget("text") == "Documents  2"
     assert view.showing_label.cget("text") == "Showing 2 of 2 documents"
 
@@ -88,7 +87,7 @@ def test_filter_hides_rows_that_dont_match(make_view) -> None:
     view.filter_entry.insert(0, "PEN")
     view.apply_filter()
 
-    assert shown_texts(view) == ['{"name": "pen"}']
+    assert shown_documents(view) == [{"name": "pen"}]
     assert view.showing_label.cget("text") == "Showing 1 of 2 documents"
 
 
@@ -212,3 +211,68 @@ def test_import_file_shows_error_for_bad_json(make_view, tmp_path) -> None:
 
     assert stored == []
     assert "Invalid JSON" in view.message_label.cget("text")
+
+
+def test_preview_colors_keys_plain_and_values_green(make_view) -> None:
+    view, _calls = make_view(stored=[{"name": "Alex", "age": 30}])
+    preview = view.rows[0].preview
+
+    def tags_at(word: str) -> tuple:
+        start = preview.search(word, "1.0")
+        return preview.tag_names(start)
+
+    assert tags_at('"name"') == ("key",)
+    assert tags_at('"Alex"') == ("string",)
+    assert tags_at("30") == ("literal",)
+    assert preview.tag_cget("key", "foreground") == \
+        document_view.get_color("text/primary")
+    assert preview.tag_cget("string", "foreground") == \
+        preview.tag_cget("literal", "foreground") == \
+        document_view.get_color("accent/primary")
+    assert preview.cget("state") == "disabled"  # read-only
+
+
+# --- document cards + Edit (Author: Archer) ---
+
+
+def test_card_shows_indented_multiline_json(make_view) -> None:
+    view, _calls = make_view(stored=[{"name": "Allen", "age": 30}])
+    preview = view.rows[0].preview
+
+    assert preview.get("1.0", "end-1c") == (
+        '{\n  "name": "Allen",\n  "age": 30\n}')
+    assert int(preview.cget("height")) >= 4  # every line visible
+
+
+def test_filter_matches_text_inside_pretty_json(make_view) -> None:
+    view, _calls = make_view([{"name": "pen"}, {"name": "cup"}])
+
+    view.filter_entry.insert(0, '"name": "cup"')
+    view.apply_filter()
+
+    assert shown_documents(view) == [{"name": "cup"}]
+
+
+def test_edit_button_opens_edit_page_with_the_document(make_view) -> None:
+    edits: list = []
+    view, _calls = make_view(stored=[{"_id": 1, "name": "pen"}],
+                             open_edit_document=edits.append)
+
+    view.rows[0].edit_button.invoke()
+
+    assert edits == [{"_id": 1, "name": "pen"}]
+
+
+def test_no_edit_button_without_edit_support(make_view) -> None:
+    view, _calls = make_view(stored=[{"name": "pen"}])
+
+    assert view.rows[0].edit_button is None
+
+
+def test_broken_card_is_marked_and_keeps_edit(make_view) -> None:
+    view, _calls = make_view(stored=[{"_id": 1}, {"_id": 2}],
+                             find_mismatches=lambda ids: {2},
+                             open_edit_document=lambda _doc: None)
+
+    assert [row.broken for row in view.rows] == [False, True]
+    assert view.rows[1].edit_button is not None

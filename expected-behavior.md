@@ -127,6 +127,18 @@ flowchart TD
 
 Styled after `design/Collections.png`. It uses the same frame as the dashboard (header, sidebar, status bar) and opens when you click a database: a table row, its `›`, or the database's **name** in the sidebar. (The sidebar chevron only shows/hides that database's collections.)
 
+Collections should show a list of documents inside formatted like a normal .json object would display them.
+
+```json
+{
+	"_id": {
+		"$oid": "64a97a64b1fdc46c489253ef"
+	}, 
+	"first_name": "Allen", 
+	"last_name": "Geral
+}
+```
+
 - The open database is **highlighted green and expanded** in the sidebar, with a table icon next to each collection.
 - Breadcrumb: `<cluster> / Databases / <database>`. The first two, and the sidebar's **Databases** item, go back to the dashboard.
 - **Create collection** (green button) opens the same style of pop-up as Create database.
@@ -151,14 +163,14 @@ The `···` menu is styled after `design/Database features.png`. It's a small c
 
 ## Documents Page
 
-The way this page is currently done is you can make raw json or upload a json document, however this app is intended to be easier to use from a consumer standpoint.
-
 Layout (built): there's no Figma mockup for this page, so it follows `design/Collections.png`. It uses the same frame as the dashboard, with the collection's database highlighted in the sidebar.
 
 - Breadcrumb: `<cluster> / Databases / <database> / <collection>`. The first three are links (there's no Back button).
 - Title is the collection name. **Import JSON file** and the green **+ Add document** are on the right.
 - Tabs: **Documents N** and **Schema** (green underline on the active one).
-- Documents tab: a filter box (matches anywhere in a document's text, any case), **Refresh**, the newest 100 documents as rows, and "Showing X of Y documents" at the bottom. Import results and errors show bottom right.
+- Documents tab: a filter box (matches anywhere in a document's text, any case), **Refresh**, the newest 100 documents, and "Showing X of Y documents" at the bottom. Import results and errors show bottom right.
+- Each document is a card showing the **whole document as indented JSON** (2 spaces, like the example under Collections Page), colored like the JSON editor: keys in normal text, values green, brackets and commas grey. Long values wrap. The text can be selected and copied.
+- Each card has an **✎ Edit** button in its top-right corner that opens the Edit document page (see below).
 - Documents load on a background thread, like the other cluster pages.
 
 The goal of this page is to let a collection have a **schema** (a layout of its fields and their types). Once a schema exists, **Add** opens a form built from it, so the user only fills in values instead of writing JSON. Collections without a schema keep the current raw JSON / upload behavior.
@@ -224,7 +236,15 @@ Clarifications (insert form, built):
 - An array with no items saves as an empty list `[]`, not `null`, since arrays are allowed to be empty. Empty items inside an array are errors.
 - `_id` typed as a 24-character hex string is saved as an ObjectId; anything else is saved as text. If the schema defines `_id` itself, it appears as a normal field instead.
 - `long` values are saved as 64-bit integers and `decimal` as Decimal128, so they match the schema type even for small numbers.
-- **Edit is deferred** to its own ticket: the app has no way to open a single document yet.
+
+Clarifications (edit, built):
+
+- **✎ Edit** on a document card opens the **Edit document** page. It's the Add document page with "Edit document" as the title and breadcrumb, a banner saying the document "will be updated when you select Save changes", and **Save changes** in place of Insert document (Ctrl+Enter also saves). On success it goes back to the documents screen.
+- Without a schema (or with one the form can't show), the JSON editor starts with the stored document as indented Extended JSON. The `_id` can be left out (the stored one is kept), but changing it is refused: "The _id can't be changed."
+- With a schema, the form starts filled in with the stored values. The `_id` box is shown but locked, and the stored `_id` is kept with its original type. Values of the wrong type show as text and are marked red straight away.
+- Fields the schema doesn't have can't be shown in the form. The footer warns "Not in the schema, removed when saved: …", since the strict schema would reject them anyway.
+- Saving **replaces the whole document**. If someone deleted it in the meantime, the page shows "This document no longer exists." Schema rejections and permission errors also show in the footer.
+- Dates with a time can be typed as full ISO (`2026-11-23T10:30:00`) so editing doesn't drop the time. Plain `YYYY-MM-DD` still works.
 
 ### Documents that break the schema
 
@@ -233,7 +253,7 @@ A schema can be added to a collection that already has documents that don't matc
 - The documents page marks these documents with an **error indicator** ("Doesn't match schema"). They are found with a `$nor: [{ $jsonSchema: ... }]` query, so MongoDB does the checking.
 - Marked rows are tinted red with "⚠ Doesn't match schema", and the status line adds "· N don't match the schema". Only the documents on screen (the newest 100) are checked.
 - The markers refresh after the schema is saved or removed in the Schema tab, and after documents are added. If the check fails, the list still shows, just without markers.
-- Opening one in the edit form highlights the bad fields in red, and saving is refused until they're fixed. *(Deferred with the edit form.)*
+- Opening one with **✎ Edit** (form) highlights the bad fields in red, and saving is refused until they're fixed.
 
 ### Schema flow
 

@@ -5,7 +5,9 @@ added the brand mark as the window icon; save remembered clusters to the
 local JSON file after a successful login; swapped the database home screen
 for the new DashboardView; rename now uses the styled FormDialog pop-up;
 all native messagebox prompts replaced with in-app MessageDialog pop-ups;
-databases now open the styled CollectionsView)
+databases now open the styled CollectionsView; cluster pages are swapped
+inside one persistent ClusterShell instead of rebuilding the whole window;
+document cards open the Edit document page)
 """
 
 from functools import partial
@@ -21,6 +23,7 @@ from .views.connection_view import ConnectionView
 from .views.dashboard_actions import DashboardActions
 from .views.dashboard_view import DashboardView
 from .views.add_document_view import AddDocumentPage, AddDocumentView
+from .views.cluster_shell import ClusterShell
 from .views.collections_view import CollectionsView
 from .views.document_view import DocumentPage, DocumentView
 from .widgets.form_dialog import FormDialog, FormField, FormSpec
@@ -48,6 +51,8 @@ class App(ctk.CTk):
         # The login that's currently connected (names shown on the dashboard).
         self._login: SavedCluster | None = None
         self._current_view = None
+        # Header + sidebar + status bar while connected (None at login).
+        self._shell: ClusterShell | None = None
 
         self._build_layout()
 
@@ -70,8 +75,9 @@ class App(ctk.CTk):
     def _show_login(self) -> None:
         """Show the login screen with the latest saved clusters.
 
-        Author: Archer
+        Author: Archer (also forgets the cluster shell, which is destroyed)
         """
+        self._shell = None
         self._show_view(ConnectionView(
             self, self._connect_to_cluster, load_saved_clusters()))
 
@@ -141,22 +147,37 @@ class App(ctk.CTk):
     def _show_dashboard(self) -> None:
         """Show the dashboard for the current connection.
 
+        Author: Archer (swaps the main area only)
+        """
+        self._show_cluster_page(DashboardView)
+
+    def _show_cluster_page(self, make_page) -> None:
+        """Show a cluster page, swapping ONLY the main area.
+
+        The shell (header, sidebar, status bar) is built the first time
+        after login and then reused, so moving between pages doesn't
+        rebuild the whole window. `make_page(shell)` builds the page.
+
         Author: Archer
         """
-        self._show_view(DashboardView(self, self._login, self._make_actions()))
+        if self._shell is None:
+            self._shell = ClusterShell(self, self._login, self._make_actions())
+            self._show_view(self._shell)
+        self._shell.show_page(make_page)
 
     def _collections_view(self, database: str) -> None:
         """Show the Collections page for one database.
 
-        Author: Archer (styled CollectionsView replaces CollectionView)
+        Author: Archer (styled CollectionsView replaces CollectionView;
+        swaps the main area only)
         """
-        self._show_view(CollectionsView(
-            self, self._login, (self._make_actions(), database)))
+        self._show_cluster_page(lambda shell: CollectionsView(shell, database))
 
     def _documents_view(self, database: str, collection: str) -> None:
         """Open the Documents page for one collection.
 
-        Author: Archer (restyled page on the shared cluster frame)
+        Author: Archer (restyled page on the shared cluster frame; swaps the
+        main area only)
         """
         connection = self._connection
         # partial fills in the database and collection names for the page
@@ -165,30 +186,38 @@ class App(ctk.CTk):
             list_documents=partial(
                 self._connection.list_documents, database, collection),
             open_add_document=partial(
-                self._add_document_view, database, collection),
+                self._document_editor_view, database, collection),
+            # called with the document to edit
+            open_edit_document=partial(
+                self._document_editor_view, database, collection),
             add_documents=partial(
                 self._connection.add_documents, database, collection),
             schema=self._schema_actions(database, collection),
             find_mismatches=partial(
                 connection.find_schema_mismatches, database, collection),
         )
-        self._show_view(DocumentView(
-            self, self._login, (self._make_actions(), page)))
+        self._show_cluster_page(lambda shell: DocumentView(shell, page))
 
-    def _add_document_view(self, database: str, collection: str) -> None:
-        """Show the Add document page for one collection.
+    def _document_editor_view(
+        self, database: str, collection: str, original: dict | None = None
+    ) -> None:
+        """Show the Add document page, or the Edit document page when
+        `original` (the stored document) is given.
 
-        Author: Archer (replaces the Add document pop-up)
+        Author: Archer (replaces the Add document pop-up; swaps the main
+        area only; also opens documents for editing)
         """
+        connection = self._connection
+        save = (connection.add_document if original is None
+                else connection.replace_document)
         page = AddDocumentPage(
             database, collection,
-            add_document=partial(
-                self._connection.add_document, database, collection),
+            save_document=partial(save, database, collection),
             get_schema=partial(
-                self._connection.get_collection_schema, database, collection),
+                connection.get_collection_schema, database, collection),
+            original=original,
         )
-        self._show_view(AddDocumentView(
-            self, self._login, (self._make_actions(), page)))
+        self._show_cluster_page(lambda shell: AddDocumentView(shell, page))
 
     def _schema_actions(self, database: str, collection: str) -> SchemaActions:
         """The db/ schema functions, set up for one collection.

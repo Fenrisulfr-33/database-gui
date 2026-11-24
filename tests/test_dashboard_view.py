@@ -9,9 +9,8 @@ tk = pytest.importorskip("tkinter")
 
 from pymongo.errors import PyMongoError  # noqa: E402
 
-from conftest import wait_for_load  # noqa: E402
+from conftest import make_shell, wait_for_load  # noqa: E402
 from db_gui.gui.views.dashboard_view import DashboardView  # noqa: E402
-from db_gui.utils.saved_clusters import SavedCluster  # noqa: E402
 
 
 @pytest.fixture
@@ -30,8 +29,8 @@ def make_view(root, make_actions):
     """Factory: a DashboardView with fake actions, already loaded."""
     def factory(calls=None, **overrides):
         calls = calls if calls is not None else []
-        login = SavedCluster("c0.example.net", "admin", "pw", "Work")
-        view = DashboardView(root, login, make_actions(calls, **overrides))
+        shell = make_shell(root, make_actions(calls, **overrides))
+        view = shell.show_page(DashboardView)
         wait_for_load(root, view)
         return view
 
@@ -125,7 +124,7 @@ def test_refresh_shows_error_when_cluster_unreachable(root, make_view) -> None:
 
 def test_header_controls_disabled_except_docs(root, make_view) -> None:
     view = make_view()
-    header = view.grid_slaves(row=0, column=0)[0]
+    header = view.shell.header
 
     assert header.search_entry.cget("state") == "disabled"
     assert header.workspace_button.cget("state") == "disabled"

@@ -59,6 +59,22 @@ def make_actions():
     return factory
 
 
+def make_shell(root, actions):
+    """A packed ClusterShell (header, sidebar, status bar) for page tests.
+
+    Show a page in it with shell.show_page(...).
+
+    Author: Archer
+    """
+    from db_gui.gui.views.cluster_shell import ClusterShell
+    from db_gui.utils.saved_clusters import SavedCluster
+
+    login = SavedCluster("c0.example.net", "admin", "pw", "Work")
+    shell = ClusterShell(root, login, actions)
+    shell.pack(expand=True, fill="both")
+    return shell
+
+
 def wait_for_load(root, view) -> None:
     """Pump Tk events until a page's background load has finished."""
     deadline = time.monotonic() + 5

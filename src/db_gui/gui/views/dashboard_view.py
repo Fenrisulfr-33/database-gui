@@ -1,10 +1,11 @@
 """Dashboard: everything on the connected cluster, styled after
 design/Dashboard.png.
 
-Author: Archer (now built on ClusterPage, shared with the Collections page)
+Author: Archer (now built on ClusterPage, shared with the Collections page;
+shown inside the persistent ClusterShell, so only the main area is redrawn)
 
 Layout (see expected-behavior.md "Dashboard"):
-    header / sidebar / status bar  (from ClusterPage)
+    header / sidebar / status bar  (from ClusterShell, built once)
     main: title, connection banner, stat cards, filter + refresh, table
 """
 
