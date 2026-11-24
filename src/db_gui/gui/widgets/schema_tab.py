@@ -23,12 +23,39 @@ import customtkinter as ctk
 from ...db.connection import PyMongoError
 from ...db.schema import (FIELD_TYPES, SchemaField, build_schema,
                           parse_schema)
+from ..theme import get_color, get_font
+from .labels import make_button
 from .message_dialog import MessageSpec, show_dialog
 
 SIMPLIFIED = "Simplified"
 RAW_JSON = "Raw JSON"
-ERROR_COLOR = "#d9534f"
-SUCCESS_COLOR = "#2e8b57"
+
+
+def _entry(parent, width: int, placeholder: str) -> ctk.CTkEntry:
+    """Text box in the app theme (dark fill, grey border).
+
+    Author: Archer
+    """
+    return ctk.CTkEntry(
+        parent, width=width, height=32, font=get_font(13),
+        placeholder_text=placeholder, fg_color=get_color("background/editor"),
+        border_color=get_color("border/default"),
+        text_color=get_color("textbox/text"),
+        placeholder_text_color=get_color("text/muted"))
+
+
+def _checkbox(parent, text: str) -> ctk.CTkCheckBox:
+    """Green checkbox in the app theme.
+
+    Author: Archer
+    """
+    return ctk.CTkCheckBox(
+        parent, text=text, width=96, font=get_font(13),
+        text_color=get_color("text/primary"),
+        fg_color=get_color("accent/primary"),
+        hover_color=get_color("button/fill-hover"),
+        border_color=get_color("border/default"),
+        checkmark_color=get_color("accent/on-primary"))
 
 
 @dataclass
@@ -52,13 +79,20 @@ class FieldRow(ctk.CTkFrame):
 
     def __init__(self, master, field: SchemaField, on_remove: Callable) -> None:
         super().__init__(master, fg_color="transparent")
-        self.name = ctk.CTkEntry(self, width=160, placeholder_text="Field name")
-        self.type = ctk.CTkOptionMenu(self, values=list(FIELD_TYPES), width=110)
-        self.is_array = ctk.CTkCheckBox(self, text="Array of", width=90)
-        self.required = ctk.CTkCheckBox(self, text="Required", width=90)
-        self.minimum = ctk.CTkEntry(self, width=70, placeholder_text="min")
-        self.maximum = ctk.CTkEntry(self, width=70, placeholder_text="max")
-        remove = ctk.CTkButton(self, text="✕", width=28,
+        self.name = _entry(self, 180, "Field name")
+        self.type = ctk.CTkOptionMenu(
+            self, values=list(FIELD_TYPES), width=120, font=get_font(13),
+            fg_color=get_color("button/secondary-fill"),
+            button_color=get_color("button/secondary-fill"),
+            button_hover_color=get_color("state/hover"),
+            text_color=get_color("text/primary"))
+        self.is_array = _checkbox(self, "Array of")
+        self.required = _checkbox(self, "Required")
+        self.minimum = _entry(self, 76, "min")
+        self.maximum = _entry(self, 76, "max")
+        remove = ctk.CTkButton(self, text="✕", width=28, fg_color="transparent",
+                               hover_color=get_color("state/hover"),
+                               text_color=get_color("text/secondary"),
                                command=lambda: on_remove(self))
         for column, widget in enumerate((self.name, self.is_array, self.type,
                                          self.required, self.minimum,
@@ -123,9 +157,16 @@ class SchemaTab(ctk.CTkFrame):
         Author: Archer
         """
         self.toggle = ctk.CTkSegmentedButton(
-            self, values=[SIMPLIFIED, RAW_JSON], command=self._switch_view)
+            self, values=[SIMPLIFIED, RAW_JSON], command=self._switch_view,
+            font=get_font(13, "bold"), height=32,
+            fg_color=get_color("surface/raised"),
+            selected_color=get_color("accent/subtle"),
+            selected_hover_color=get_color("accent/subtle"),
+            unselected_color=get_color("surface/raised"),
+            unselected_hover_color=get_color("state/hover"),
+            text_color=get_color("text/primary"))
         self.toggle.set(SIMPLIFIED)
-        self.toggle.grid(row=0, column=0, padx=10, pady=(10, 6), sticky="w")
+        self.toggle.grid(row=0, column=0, pady=(0, 12), sticky="w")
         self.view = SIMPLIFIED
 
     def _build_editors(self) -> None:
@@ -136,14 +177,19 @@ class SchemaTab(ctk.CTkFrame):
         self.simplified = ctk.CTkFrame(self, fg_color="transparent")
         self.simplified.grid_columnconfigure(0, weight=1)
         self.simplified.grid_rowconfigure(0, weight=1)
-        self.field_list = ctk.CTkScrollableFrame(self.simplified, height=260)
+        self.field_list = ctk.CTkScrollableFrame(
+            self.simplified, height=260, corner_radius=8, border_width=1,
+            fg_color=get_color("surface/card"),
+            border_color=get_color("border/default"))
         self.field_list.grid(row=0, column=0, sticky="nsew")
-        ctk.CTkButton(self.simplified, text="+ Add field", width=120,
-                      command=self.add_row).grid(row=1, column=0, pady=6,
-                                                 sticky="w")
+        make_button(self.simplified, "+  Add field", self.add_row).grid(
+            row=1, column=0, pady=(10, 0), sticky="w")
         self.json_box = ctk.CTkTextbox(
-            self, font=ctk.CTkFont(family="Courier", size=13))
-        self.simplified.grid(row=1, column=0, padx=10, sticky="nsew")
+            self, font=get_font(13), corner_radius=8, border_width=1,
+            fg_color=get_color("background/editor"),
+            border_color=get_color("border/default"),
+            text_color=get_color("text/primary"))
+        self.simplified.grid(row=1, column=0, sticky="nsew")
 
     def _build_buttons(self) -> None:
         """Save schema / Remove schema and the message line.
@@ -151,15 +197,20 @@ class SchemaTab(ctk.CTkFrame):
         Author: Archer
         """
         row = ctk.CTkFrame(self, fg_color="transparent")
-        row.grid(row=2, column=0, padx=10, pady=(6, 0), sticky="ew")
-        ctk.CTkButton(row, text="Save schema",
-                      command=self.save).pack(side="left", padx=(0, 10))
-        self.remove_button = ctk.CTkButton(row, text="Remove schema",
-                                           command=self.remove)
-        self.remove_button.pack(side="left")
-        self.message = ctk.CTkLabel(self, text="", wraplength=640,
-                                    justify="left")
-        self.message.grid(row=3, column=0, padx=10, pady=6, sticky="w")
+        row.grid(row=2, column=0, pady=(16, 0), sticky="ew")
+        ctk.CTkButton(
+            row, text="Save schema", height=38, corner_radius=6,
+            font=get_font(13, "bold"), fg_color=get_color("button/fill"),
+            hover_color=get_color("button/fill-hover"),
+            text_color=get_color("button/text"),
+            command=self.save).pack(side="right")
+        self.remove_button = make_button(row, "Remove schema", self.remove)
+        self.remove_button.configure(
+            height=38, text_color_disabled=get_color("text/disabled"))
+        self.remove_button.pack(side="right", padx=10)
+        self.message = ctk.CTkLabel(row, text="", wraplength=640,
+                                    justify="left", font=get_font(12))
+        self.message.pack(side="left")
 
     def load_schema(self) -> None:
         """Get the schema from MongoDB and show it.
@@ -283,7 +334,7 @@ class SchemaTab(ctk.CTkFrame):
         shown, hidden = ((self.json_box, self.simplified) if target == RAW_JSON
                          else (self.simplified, self.json_box))
         hidden.grid_remove()
-        shown.grid(row=1, column=0, padx=10, sticky="nsew")
+        shown.grid(row=1, column=0, sticky="nsew")
         self.toggle.set(target)
         self.view = target
 
@@ -364,8 +415,8 @@ class SchemaTab(ctk.CTkFrame):
 
         Author: Archer
         """
-        self.message.configure(
-            text=text, text_color=ERROR_COLOR if is_error else SUCCESS_COLOR)
+        self.message.configure(text=text, text_color=get_color(
+            "feedback/danger" if is_error else "accent/primary"))
 
 
 def _parse_limit(text: str, name: str, which: str) -> int | float | None:

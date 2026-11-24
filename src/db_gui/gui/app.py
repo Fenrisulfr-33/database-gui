@@ -22,7 +22,7 @@ from .views.dashboard_actions import DashboardActions
 from .views.dashboard_view import DashboardView
 from .views.add_document_view import AddDocumentPage, AddDocumentView
 from .views.collections_view import CollectionsView
-from .views.document_view import DocumentActions, DocumentView
+from .views.document_view import DocumentPage, DocumentView
 from .widgets.form_dialog import FormDialog, FormField, FormSpec
 from .widgets.message_dialog import MessageSpec, show_dialog
 from .widgets.schema_tab import SchemaActions
@@ -154,13 +154,14 @@ class App(ctk.CTk):
             self, self._login, (self._make_actions(), database)))
 
     def _documents_view(self, database: str, collection: str) -> None:
-        """Open the screen for one collection.
+        """Open the Documents page for one collection.
 
-        Author: Archer (added the Schema tab's actions)
+        Author: Archer (restyled page on the shared cluster frame)
         """
-        # partial fills in the database and collection names for the view
-        actions = DocumentActions(
-            back=lambda: self._collections_view(database),
+        connection = self._connection
+        # partial fills in the database and collection names for the page
+        page = DocumentPage(
+            database, collection,
             list_documents=partial(
                 self._connection.list_documents, database, collection),
             open_add_document=partial(
@@ -169,10 +170,10 @@ class App(ctk.CTk):
                 self._connection.add_documents, database, collection),
             schema=self._schema_actions(database, collection),
             find_mismatches=partial(
-                self._connection.find_schema_mismatches, database, collection),
+                connection.find_schema_mismatches, database, collection),
         )
-        self._show_view(
-            DocumentView(self, f"{database}.{collection}", actions))
+        self._show_view(DocumentView(
+            self, self._login, (self._make_actions(), page)))
 
     def _add_document_view(self, database: str, collection: str) -> None:
         """Show the Add document page for one collection.

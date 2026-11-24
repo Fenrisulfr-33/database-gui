@@ -153,6 +153,14 @@ The `···` menu is styled after `design/Database features.png`. It's a small c
 
 The way this page is currently done is you can make raw json or upload a json document, however this app is intended to be easier to use from a consumer standpoint.
 
+Layout (built): there's no Figma mockup for this page, so it follows `design/Collections.png`. It uses the same frame as the dashboard, with the collection's database highlighted in the sidebar.
+
+- Breadcrumb: `<cluster> / Databases / <database> / <collection>`. The first three are links (there's no Back button).
+- Title is the collection name. **Import JSON file** and the green **+ Add document** are on the right.
+- Tabs: **Documents N** and **Schema** (green underline on the active one).
+- Documents tab: a filter box (matches anywhere in a document's text, any case), **Refresh**, the newest 100 documents as rows, and "Showing X of Y documents" at the bottom. Import results and errors show bottom right.
+- Documents load on a background thread, like the other cluster pages.
+
 The goal of this page is to let a collection have a **schema** (a layout of its fields and their types). Once a schema exists, **Add** opens a form built from it, so the user only fills in values instead of writing JSON. Collections without a schema keep the current raw JSON / upload behavior.
 
 ### Schema
