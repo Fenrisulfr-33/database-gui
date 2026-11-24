@@ -10,6 +10,11 @@ Main area, top to bottom:
 - JSON editor card (left) + Document details panel (right)
 - footer: ready/not ready line, Cancel, "+ Insert document"
 
+When the collection has a schema the simplified view can show, the JSON
+editor is swapped for a form built from it (widgets/schema_form.py) once the
+background load finds the schema. Unsupported schemas keep the JSON editor;
+MongoDB still checks what gets inserted.
+
 The design's "Validate before insert" checkbox is replaced by a Schema info
 line: schemas are strict, so validation can't be switched off (see
 expected-behavior.md > Documents Page > Add document page).
@@ -23,11 +28,12 @@ from dataclasses import dataclass
 import customtkinter as ctk
 from pymongo.errors import PyMongoError
 
-from ...db.schema import UnsupportedSchemaError
+from ...db.schema import UnsupportedSchemaError, parse_schema
 from ..assets import TABLE, make_icon_label
 from ..theme import get_color, get_font
 from ..widgets.json_editor import JsonEditor
 from ..widgets.labels import make_button, make_label
+from ..widgets.schema_form import SchemaForm
 from .cluster_page import ClusterPage
 
 EXTENDED_JSON_URL = (
@@ -39,6 +45,10 @@ SCHEMA_TEXTS = {
           "are rejected.",
     False: "None. This collection accepts any document.",
 }
+JSON_TYPES_TEXT = ("Use Extended JSON for ObjectId, Date, Decimal128, and "
+                   "other BSON types.")
+FORM_TYPES_TEXT = ("Each field is converted to its schema type. Dates use "
+                   "YYYY-MM-DD. Empty optional fields are saved as null.")
 
 
 @dataclass
@@ -57,10 +67,12 @@ class AddDocumentPage:
 
 
 class AddDocumentView(ClusterPage):
-    """Type a document as JSON and insert it.
+    """Type a document (JSON, or a form when there's a schema) and insert it.
 
     Author: Archer
     """
+
+    form: SchemaForm | None = None  # set once a usable schema is found
 
     def __init__(self, master, login, page) -> None:
         """`page` is (actions, AddDocumentPage).
@@ -141,13 +153,13 @@ class AddDocumentView(ClusterPage):
 
         Author: Archer
         """
-        content = ctk.CTkFrame(self.main, fg_color="transparent")
-        content.grid(row=3, column=0, sticky="nsew")
-        content.grid_columnconfigure(0, weight=1)
-        content.grid_rowconfigure(0, weight=1)
-        self.editor = JsonEditor(content, self._on_editor_change)
+        self.content = ctk.CTkFrame(self.main, fg_color="transparent")
+        self.content.grid(row=3, column=0, sticky="nsew")
+        self.content.grid_columnconfigure(0, weight=1)
+        self.content.grid_rowconfigure(0, weight=1)
+        self.editor = JsonEditor(self.content, self._on_editor_change)
         self.editor.grid(row=0, column=0, padx=(0, 20), sticky="nsew")
-        self._build_details(content)
+        self._build_details(self.content)
 
     def _build_details(self, parent) -> None:
         """Document details panel.
@@ -167,14 +179,14 @@ class AddDocumentView(ClusterPage):
             fill="x", pady=16)
         self._add_note(body, "Document ID", "Provide an _id or leave it out "
                        "to generate an ObjectId automatically.")
-        self._add_note(body, "BSON data types", "Use Extended JSON for "
-                       "ObjectId, Date, Decimal128, and other BSON types.")
+        self.types_label = self._add_note(body, "BSON data types",
+                                          JSON_TYPES_TEXT)
         self.schema_label = self._add_note(body, "Schema", SCHEMA_TEXTS[None])
-        link = make_label(body, "Extended JSON reference ↗", "link")
-        link.configure(font=get_font(12), cursor="hand2")
-        link.bind("<Button-1>",
-                  lambda _event: webbrowser.open(EXTENDED_JSON_URL))
-        link.pack(anchor="w", pady=(4, 0))
+        self.json_link = make_label(body, "Extended JSON reference ↗", "link")
+        self.json_link.configure(font=get_font(12), cursor="hand2")
+        self.json_link.bind("<Button-1>",
+                            lambda _event: webbrowser.open(EXTENDED_JSON_URL))
+        self.json_link.pack(anchor="w", pady=(4, 0))
 
     def _build_destination(self, parent) -> None:
         """DESTINATION, database name, and the collection with its icon.
@@ -225,11 +237,11 @@ class AddDocumentView(ClusterPage):
         """Enable Insert only for a valid document.
 
         Called by the editor while it's being built, before the footer
-        exists, so it checks first.
+        exists, so it checks first. Ignored once the form replaced it.
 
         Author: Archer
         """
-        if not hasattr(self, "insert_button"):
+        if not hasattr(self, "insert_button") or self.form is not None:
             return
         self.insert_button.configure(
             state="normal" if is_valid else "disabled")
@@ -245,12 +257,14 @@ class AddDocumentView(ClusterPage):
     def insert_document(self) -> None:
         """Insert the typed document, then go back to the documents list.
 
-        Errors (bad JSON, duplicate _id, schema rejection) stay on the page.
+        Errors (bad JSON, fields marked red, duplicate _id, schema
+        rejection) stay on the page.
 
-        Author: Archer
+        Author: Archer (reads from the form when there is one)
         """
+        source = self.form or self.editor
         try:
-            self.page.add_document(self.editor.get_document())
+            self.page.add_document(source.get_document())
         except ValueError as error:
             self.set_ready_text(str(error), is_error=True)
             return
@@ -262,11 +276,11 @@ class AddDocumentView(ClusterPage):
         self.go_back()
 
     def _on_shortcut(self, _event=None) -> str:
-        """Ctrl+Enter inserts (if the document is valid).
+        """Ctrl+Enter inserts (if the JSON is valid; the form checks itself).
 
         Author: Archer
         """
-        if not self.editor.error:
+        if self.form is not None or not self.editor.error:
             self.insert_document()
         return "break"
 
@@ -284,19 +298,40 @@ class AddDocumentView(ClusterPage):
     # ----- ClusterPage hooks -----
 
     def load_page(self):
-        """WORKER THREAD: database names (sidebar) + whether there's a schema.
+        """WORKER THREAD: database names (sidebar), plus (has_schema, fields).
 
-        A validator this app can't show still counts as a schema.
+        fields is None when there's no schema, or one the form can't show
+        (that still counts as a schema).
 
         Author: Archer
         """
         names = self._actions.list_database_names()
         try:
-            has_schema = self.page.get_schema() is not None
+            schema = self.page.get_schema()
+            fields = None if schema is None else parse_schema(schema)
         except UnsupportedSchemaError:
-            has_schema = True
-        return names, has_schema
+            return names, (True, None)
+        return names, (schema is not None, fields)
 
     def show_page(self, page_data, status) -> None:
-        """Author: Archer"""
-        self.schema_label.configure(text=SCHEMA_TEXTS[page_data])
+        """Schema line, and swap in the form the first time it's possible.
+
+        Author: Archer
+        """
+        has_schema, fields = page_data
+        self.schema_label.configure(text=SCHEMA_TEXTS[has_schema])
+        if fields and self.form is None:
+            self.use_form(fields)
+
+    def use_form(self, fields: list) -> None:
+        """Replace the JSON editor with a form built from the schema.
+
+        Author: Archer
+        """
+        self.editor.grid_remove()
+        self.form = SchemaForm(self.content, fields, self._on_shortcut)
+        self.form.grid(row=0, column=0, padx=(0, 20), sticky="nsew")
+        self.types_label.configure(text=FORM_TYPES_TEXT)
+        self.json_link.pack_forget()  # the form doesn't use Extended JSON
+        self.insert_button.configure(state="normal")
+        self.set_ready_text("Fill in the fields, then select Insert document.")

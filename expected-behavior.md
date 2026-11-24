@@ -209,6 +209,15 @@ When a collection has a schema, **Add** and **Edit** both open a form generated 
   - On **edit** it's shown but read-only, since MongoDB doesn't allow changing an existing `_id`.
 - Values are converted to their declared type before saving. Anything invalid (wrong type, out of min/max range, missing required value) is **highlighted red** and the form refuses to save until it's fixed.
 
+Clarifications (insert form, built):
+
+- The form replaces the JSON editor on the **Add document page** once the page finds the collection's schema. If the schema has rules the form can't show, the page keeps the JSON editor (MongoDB still checks the document).
+- `bool` is a **true / false** dropdown rather than a checkbox, so an optional bool can also be left empty (`null`).
+- An array with no items saves as an empty list `[]`, not `null`, since arrays are allowed to be empty. Empty items inside an array are errors.
+- `_id` typed as a 24-character hex string is saved as an ObjectId; anything else is saved as text. If the schema defines `_id` itself, it appears as a normal field instead.
+- `long` values are saved as 64-bit integers and `decimal` as Decimal128, so they match the schema type even for small numbers.
+- **Edit is deferred** to its own ticket: the app has no way to open a single document yet.
+
 ### Documents that break the schema
 
 A schema can be added to a collection that already has documents that don't match (after the warning above). MongoDB keeps those documents, but rejects any update to them until they match.

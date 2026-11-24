@@ -148,3 +148,59 @@ def test_namespace_is_database_dot_collection(make_view) -> None:
     view, _calls, _stored = make_view()
 
     assert view._namespace() == "shop.customers"
+
+
+# --- Schema form (Author: Archer) ---
+
+from db_gui.db.schema import SchemaField, build_schema  # noqa: E402
+
+NAME_SCHEMA = build_schema([SchemaField("name", "string", required=True)])
+
+
+def test_page_uses_form_when_collection_has_schema(make_view) -> None:
+    view, _calls, _stored = make_view(get_schema=lambda: NAME_SCHEMA)
+
+    assert view.form is not None
+    assert not view.editor.winfo_manager()  # JSON editor hidden
+    assert view.types_label.cget("text") == add_document_view.FORM_TYPES_TEXT
+    assert "Fill in the fields" in view.ready_label.cget("text")
+    assert not view.json_link.winfo_manager()
+
+
+def test_page_keeps_json_editor_without_schema(make_view) -> None:
+    view, _calls, _stored = make_view()
+
+    assert view.form is None
+    assert view.editor.winfo_manager() == "grid"
+
+
+def test_form_insert_adds_converted_document(make_view) -> None:
+    view, calls, stored = make_view(get_schema=lambda: NAME_SCHEMA)
+    view.form.inputs[1].entry.insert(0, "Ada")
+
+    view.insert_document()
+
+    assert stored == [{"name": "Ada"}]
+    assert calls == [("open_collection", "shop", "customers")]
+
+
+def test_form_insert_refuses_bad_fields(make_view) -> None:
+    view, calls, stored = make_view(get_schema=lambda: NAME_SCHEMA)
+
+    view._on_shortcut()
+
+    assert stored == []
+    assert calls == []
+    assert view.ready_label.cget("text") == "Fix the fields marked in red."
+
+
+def test_refresh_keeps_the_same_form(root, make_view) -> None:
+    view, _calls, _stored = make_view(get_schema=lambda: NAME_SCHEMA)
+    form = view.form
+    form.inputs[1].entry.insert(0, "typed")
+
+    view.refresh()
+    wait_for_load(root, view)
+
+    assert view.form is form
+    assert form.inputs[1].entry.get() == "typed"
