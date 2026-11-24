@@ -18,6 +18,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "mongomock>=4.1",
+    "pyinstaller>=6.0",  # builds dist/db-gui.exe, see SETUP.md
 ]
 
 # Lets teammates just type `db-gui` in the terminal to launch the app
@@ -31,6 +32,13 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Capture output at the Python level, not by redirecting file descriptors:
+# with pytest's default fd capture, Tk on Windows randomly fails to start or
+# load images (bare TclError), making GUI tests fail/skip at random.
+addopts = "--capture=sys"
+# Same filter as gui/assets.py: our icons are tk.PhotoImage (no Pillow), which
+# CustomTkinter warns about; pytest resets warning filters per test.
+filterwarnings = ["ignore:.*Given image is not CTkImage:UserWarning"]
 
 # Ship the images in src/db_gui/assets/ (brand mark, etc.) with the package.
 [tool.setuptools.package-data]

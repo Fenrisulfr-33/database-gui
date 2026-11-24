@@ -3,6 +3,7 @@
 import hashlib
 import os
 import tempfile
+import time
 from dataclasses import dataclass
 from typing import BinaryIO
 
@@ -10,10 +11,19 @@ from bson import BSON
 from bson.codec_options import CodecOptions
 from pymongo import IndexModel, MongoClient
 from pymongo.database import Database
-from pymongo.errors import BulkWriteError, DuplicateKeyError, PyMongoError
+from pymongo.errors import (BulkWriteError, DuplicateKeyError,
+                            OperationFailure, PyMongoError, WriteError)
+
+from db_gui.db.schema import UnsupportedSchemaError, parse_schema
 
 # the document list is drawn in the GUI, so don't load a whole big collection
 DOCUMENT_LIST_LIMIT = 100
+# how many documents to look at when counting a collection's fields
+FIELD_SAMPLE_SIZE = 100
+# MongoDB's "target namespace already exists" error code
+NAMESPACE_EXISTS = 48
+# MongoDB's "document doesn't match the collection's validator" error code
+DOCUMENT_VALIDATION_FAILURE = 121
 
 
 @dataclass
@@ -33,6 +43,58 @@ class ImportResult:
     inserted: int
     skipped: int
     documents: list[dict]
+
+
+@dataclass
+class DatabaseStats:
+    """Numbers for one database row on the dashboard.
+
+    Author: Archer
+
+    A value is None when the server would not report it (for example the
+    user lacks permission to run dbStats on that database).
+    """
+
+    name: str
+    collections: int | None = None
+    documents: int | None = None
+    data_size: int | None = None
+    storage_size: int | None = None
+    # Used by the Collections page stat cards (Author: Archer).
+    indexes: int | None = None
+    index_size: int | None = None
+    average_document_size: int | None = None
+
+
+@dataclass
+class CollectionStats:
+    """Numbers for one collection row on the Collections page.
+
+    Author: Archer
+
+    A value is None when the server would not report it (for example a
+    view has no storage stats).
+    """
+
+    name: str
+    documents: int | None = None
+    data_size: int | None = None
+    indexes: int | None = None
+    index_size: int | None = None
+    fields: int | None = None
+
+
+@dataclass
+class ClusterStatus:
+    """Connection facts for the dashboard banner and status bar.
+
+    Author: Archer
+    """
+
+    host: str
+    ping_ms: int | None = None
+    version: str | None = None
+    replica_set: str | None = None
 
 
 class MongoConnection:
@@ -132,7 +194,34 @@ class MongoConnection:
         except DuplicateKeyError as error:
             raise ValueError(
                 "A document with that _id already exists.") from error
+        except WriteError as error:
+            # Author: Archer - readable error when the schema rejects it
+            _raise_readable_write_error(error)
         return self.list_documents(database_name, collection_name)
+
+    def replace_document(
+        self, database_name: str, collection_name: str, document: dict
+    ) -> None:
+        """Save an edited document over the stored one with the same _id.
+
+        The whole document is replaced (fields left out are removed), which
+        is what the Edit document page wants: it sends the full document.
+        Raises ValueError if it has no _id, the schema rejects it, or the
+        document was deleted in the meantime.
+
+        Author: Archer
+        """
+        if not isinstance(document, dict) or "_id" not in document:
+            raise ValueError("An edited document must keep its _id.")
+        collection = self._require_client()[database_name][collection_name]
+        try:
+            result = collection.replace_one({"_id": document["_id"]},
+                                            document)
+        except WriteError as error:
+            _raise_readable_write_error(error)
+        if result.matched_count == 0:
+            raise ValueError(
+                "This document no longer exists. It may have been deleted.")
 
     def add_documents(
         self, database_name: str, collection_name: str, documents: list[dict]
@@ -180,6 +269,194 @@ class MongoConnection:
         if data_size is None or index_size is None:
             return None
         return int(data_size + index_size)
+
+    def list_database_stats(self) -> list[DatabaseStats]:
+        """Return dashboard stats for every visible database, sorted by name.
+
+        Author: Archer
+        """
+        return [self.get_database_stats(name) for name in self.list_databases()]
+
+    def get_database_stats(self, database_name: str) -> DatabaseStats:
+        """Run dbStats for one database; missing numbers become None.
+
+        Author: Archer
+
+        storage_size includes indexes so it matches the dashboard footnote
+        "Sizes include data and indexes".
+        """
+        try:
+            stats = self._require_client().get_database(database_name).command(
+                "dbStats")
+        except PyMongoError:
+            return DatabaseStats(database_name)
+        storage = stats.get("storageSize")
+        if storage is not None:
+            storage += stats.get("indexSize", 0)
+        return DatabaseStats(
+            database_name, _as_int(stats.get("collections")),
+            _as_int(stats.get("objects")), _as_int(stats.get("dataSize")),
+            _as_int(storage), _as_int(stats.get("indexes")),
+            _as_int(stats.get("indexSize")), _as_int(stats.get("avgObjSize")))
+
+    def list_collection_stats(self, database_name: str) -> list[CollectionStats]:
+        """Stats for every collection in a database, sorted by name.
+
+        Author: Archer
+        """
+        return [self.get_collection_stats(database_name, name)
+                for name in self.list_collections(database_name)]
+
+    def get_collection_stats(
+        self, database_name: str, collection_name: str
+    ) -> CollectionStats:
+        """Storage stats ($collStats) plus a sampled field count.
+
+        Author: Archer
+        """
+        collection = self._require_client()[database_name][collection_name]
+        stats = CollectionStats(collection_name,
+                                fields=_count_fields(collection))
+        try:
+            result = next(collection.aggregate(
+                [{"$collStats": {"storageStats": {}}}]), {})
+        except PyMongoError:
+            return stats  # e.g. a view, or no permission
+        storage = result.get("storageStats", {})
+        stats.documents = _as_int(storage.get("count"))
+        stats.data_size = _as_int(storage.get("size"))
+        stats.indexes = _as_int(storage.get("nindexes"))
+        stats.index_size = _as_int(storage.get("totalIndexSize"))
+        return stats
+
+    def rename_collection(
+        self, database_name: str, source_name: str, target_name: str
+    ) -> None:
+        """Rename a collection in place (MongoDB's renameCollection).
+
+        Raises ValueError with a readable message for bad or taken names.
+
+        Author: Archer
+        """
+        target_name = target_name.strip()
+        _validate_collection_name(target_name)
+        collection = self._require_client()[database_name][source_name]
+        try:
+            collection.rename(target_name)
+        except OperationFailure as error:
+            if error.code == NAMESPACE_EXISTS:
+                raise ValueError(
+                    f"A collection named '{target_name}' already exists."
+                ) from error
+            raise
+
+    def get_collection_schema(
+        self, database_name: str, collection_name: str
+    ) -> dict | None:
+        """Return the collection's $jsonSchema, or None if it has no schema.
+
+        The schema is stored in MongoDB as the collection's validator:
+        {"$jsonSchema": {...}}. Only the inner dict is returned.
+        Raises UnsupportedSchemaError if the validator also uses plain query
+        rules, which this app can't show.
+
+        Author: Archer
+        """
+        database = self._require_client()[database_name]
+        infos = list(database.list_collections(filter={"name": collection_name}))
+        if not infos:
+            raise ValueError(f"Collection '{collection_name}' doesn't exist.")
+        validator = infos[0].get("options", {}).get("validator")
+        if not validator:
+            return None
+        if set(validator) != {"$jsonSchema"}:
+            raise UnsupportedSchemaError(
+                "This collection's validator uses rules other than "
+                "$jsonSchema, which this version can't show.")
+        return validator["$jsonSchema"]
+
+    def set_collection_schema(
+        self, database_name: str, collection_name: str, schema: dict
+    ) -> None:
+        """Save a strict schema as the collection's validator (collMod).
+
+        The schema is checked with parse_schema first, so anything the
+        simplified view can't show is rejected before it reaches MongoDB.
+        Existing documents are kept even if they don't match; use
+        count_schema_mismatches first to warn the user.
+
+        Author: Archer
+        """
+        parse_schema(schema)
+        database = self._require_client()[database_name]
+        try:
+            database.command(
+                "collMod", collection_name,
+                validator={"$jsonSchema": schema},
+                validationLevel="strict", validationAction="error")
+        except OperationFailure as error:
+            raise ValueError(
+                f"MongoDB rejected the schema: {error.details.get('errmsg', error)}"
+            ) from error
+
+    def remove_collection_schema(
+        self, database_name: str, collection_name: str
+    ) -> None:
+        """Remove the schema so the collection is free-form again.
+
+        Author: Archer
+        """
+        database = self._require_client()[database_name]
+        database.command(
+            "collMod", collection_name, validator={}, validationLevel="off")
+
+    def count_schema_mismatches(
+        self, database_name: str, collection_name: str, schema: dict
+    ) -> int:
+        """Count documents that would break `schema` (for the save warning).
+
+        `$nor` flips the match, so MongoDB itself counts the documents that
+        do NOT pass the schema.
+
+        Author: Archer
+        """
+        collection = self._require_client()[database_name][collection_name]
+        return collection.count_documents({"$nor": [{"$jsonSchema": schema}]})
+
+    def find_schema_mismatches(
+        self, database_name: str, collection_name: str, document_ids: list
+    ) -> set:
+        """Return which of `document_ids` break the collection's current schema.
+
+        Takes the ids the documents page is showing, so only those are
+        checked. Returns an empty set when the collection has no schema.
+
+        Author: Archer
+        """
+        schema = self.get_collection_schema(database_name, collection_name)
+        if schema is None or not document_ids:
+            return set()
+        collection = self._require_client()[database_name][collection_name]
+        query = {"_id": {"$in": list(document_ids)},
+                 "$nor": [{"$jsonSchema": schema}]}
+        return {document["_id"] for document in collection.find(query, {"_id": 1})}
+
+    def get_cluster_status(self) -> ClusterStatus:
+        """Ping the cluster and read its version and replica set name.
+
+        Author: Archer
+        """
+        client = self._require_client()
+        status = ClusterStatus(host=_host_from_uri(self._uri))
+        try:
+            started = time.perf_counter()
+            client.admin.command("ping")
+            status.ping_ms = round((time.perf_counter() - started) * 1000)
+            status.version = client.server_info().get("version")
+            status.replica_set = client.admin.command("hello").get("setName")
+        except PyMongoError:
+            pass  # keep whatever was filled in before the failure
+        return status
 
     def rename_database(self, source_name: str, target_name: str) -> str | None:
         """Stage a local BSON archive, then replace the source database.
@@ -711,3 +988,63 @@ class MongoConnection:
 
 
 __all__ = ["ImportResult", "MongoConnection", "PyMongoError"]
+
+
+def _as_int(value) -> int | None:
+    """Turn a dbStats number (may be float) into an int, keeping None.
+
+    Author: Archer
+    """
+    return None if value is None else int(value)
+
+
+def _host_from_uri(uri: str) -> str:
+    """Return just the host part of a connection string for display.
+
+    "mongodb+srv://user:pw@cluster0.abc.mongodb.net/?x=1" -> "cluster0.abc.mongodb.net"
+
+    Author: Archer
+    """
+    host = uri.split("://", 1)[-1]
+    host = host.rsplit("@", 1)[-1]  # drop any user:password@
+    return host.split("/", 1)[0].split("?", 1)[0]
+
+
+def _count_fields(collection) -> int | None:
+    """Distinct top-level field names in a sample of documents.
+
+    Author: Archer
+    """
+    try:
+        fields = set()
+        for document in collection.find({}, limit=FIELD_SAMPLE_SIZE):
+            fields.update(document.keys())
+        return len(fields)
+    except PyMongoError:
+        return None
+
+
+def _validate_collection_name(name: str) -> None:
+    """Raise ValueError if MongoDB wouldn't accept this collection name.
+
+    Author: Archer
+    """
+    if not name:
+        raise ValueError("A collection name is required.")
+    if "$" in name or "\0" in name:
+        raise ValueError("Collection names can't contain '$' or null.")
+    if name.startswith("system."):
+        raise ValueError("Collection names can't start with 'system.'.")
+
+
+def _raise_readable_write_error(error: WriteError) -> None:
+    """Re-raise a write error, as a readable ValueError when it's the
+    collection's schema rejecting the document (shared by insert + edit).
+
+    Author: Archer
+    """
+    if error.code == DOCUMENT_VALIDATION_FAILURE:
+        raise ValueError(
+            "This document doesn't match the collection's schema."
+        ) from error
+    raise error

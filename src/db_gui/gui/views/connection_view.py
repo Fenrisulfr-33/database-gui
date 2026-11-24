@@ -1,6 +1,8 @@
 """Cluster login view, styled after design/Login.png.
 
-Author: Archer (restyled to match the Login design + palette in design/)
+Author: Archer (restyled to match the Login design + palette in design/;
+wired up "Remember me", the optional cluster name, and the saved-cluster
+picker per expected-behavior.md)
 
 Every color comes from theme.get_color(), so switching palettes restyles this
 screen without touching this file.
@@ -11,6 +13,7 @@ import webbrowser
 
 import customtkinter as ctk
 
+from ...utils.saved_clusters import SavedCluster
 from ..assets import BRAND_MARK, load_image
 from ..theme import get_color, get_font
 from ..widgets.icons import create_icon_canvas, draw_eye_glyph
@@ -19,6 +22,7 @@ MONGODB_SIGNUP_URL = "https://www.mongodb.com/cloud/atlas/register"
 FIELD_WIDTH = 360
 FIELD_HEIGHT = 44
 PASSWORD_MASK = "•"
+SAVED_PICKER_PROMPT = "Choose a saved cluster"
 
 # Named text styles: (palette color key, pixel size, weight).
 TEXT_STYLES = {
@@ -34,13 +38,21 @@ TEXT_STYLES = {
 
 
 class ConnectionView(ctk.CTkFrame):
-    """Collect cluster credentials and report the login attempt."""
+    """Collect cluster credentials and report the login attempt.
 
-    def __init__(self, master: ctk.CTk, submit_login) -> None:
+    submit_login(entry: SavedCluster, remember: bool) is called on Sign in.
+    The App decides whether the login worked and only saves `entry` to the
+    local JSON file when it did AND `remember` is True.
+    """
+
+    def __init__(self, master: ctk.CTk, submit_login,
+                 saved_clusters: list[SavedCluster] | None = None) -> None:
+        """Author: Archer (added saved_clusters for the picker)"""
         super().__init__(
             master, fg_color=get_color("background/login"), corner_radius=0
         )
         self._submit_login = submit_login
+        self._saved_clusters = saved_clusters or []
         self._password_hidden = True
         self._build_layout()
 
@@ -81,7 +93,7 @@ class ConnectionView(ctk.CTkFrame):
     def _build_card(self, parent) -> None:
         """Build the rounded login card holding the form.
 
-        Author: Archer
+        Author: Archer (added the saved-cluster picker above the fields)
         """
         card = ctk.CTkFrame(parent, corner_radius=24,
                             fg_color=get_color("surface/login-card"))
@@ -92,12 +104,48 @@ class ConnectionView(ctk.CTkFrame):
             anchor="w")
         self._add_text(body, "Pick up where you left off in your cluster.",
                        "subtitle").pack(anchor="w", pady=(4, 20))
+        # Only shown when the remember-me file has at least one entry.
+        if self._saved_clusters:
+            self._build_saved_picker(body)
         self._uri_entry = self._add_field(
             body, "Mongo Cluster", "cluster0.abcde.mongodb.net")
         self._username_entry = self._add_field(
             body, "Username", "db_username")
         self._password_entry = self._add_password_field(body)
         self._build_actions(body)
+
+    def _build_saved_picker(self, parent) -> None:
+        """Add a dropdown of saved clusters; picking one fills in the form.
+
+        Author: Archer
+        """
+        self._add_text(parent, "Saved clusters", "label").pack(
+            anchor="w", pady=(0, 8))
+        self._saved_picker = ctk.CTkOptionMenu(
+            parent, width=FIELD_WIDTH, height=FIELD_HEIGHT, corner_radius=4,
+            values=[entry.display_label() for entry in self._saved_clusters],
+            font=get_font(13), dropdown_font=get_font(13),
+            fg_color=get_color("textbox/fill"),
+            button_color=get_color("textbox/fill"),
+            button_hover_color=get_color("state/hover"),
+            text_color=get_color("textbox/text"),
+            command=self._fill_from_saved,
+        )
+        self._saved_picker.set(SAVED_PICKER_PROMPT)
+        self._saved_picker.pack(pady=(0, 18))
+
+    def _fill_from_saved(self, label: str) -> None:
+        """Copy the picked saved cluster into the form fields.
+
+        Author: Archer
+        """
+        for entry in self._saved_clusters:
+            if entry.display_label() == label:
+                _replace_text(self._uri_entry, entry.cluster)
+                _replace_text(self._username_entry, entry.username)
+                _replace_text(self._password_entry, entry.password)
+                _replace_text(self._name_entry, entry.name)
+                return
 
     def _add_text(self, parent, text: str, style: str) -> ctk.CTkLabel:
         """Create a label in one of TEXT_STYLES (caller packs/grids it).
@@ -195,11 +243,10 @@ class ConnectionView(ctk.CTkFrame):
                        "hint").pack(anchor="w", pady=(24, 0))
 
     def _add_remember_me(self, parent) -> None:
-        """Add the "Remember me" checkbox, checked by default.
+        """Add the "Remember me" checkbox (checked by default) and the
+        optional cluster-name box that only shows while it is checked.
 
-        Visual only for now: nothing reads this value yet.
-
-        Author: Archer
+        Author: Archer (now controls saving to the local JSON file)
         """
         self._remember_me = ctk.CTkCheckBox(
             parent, text="Remember me", font=get_font(12),
@@ -209,10 +256,26 @@ class ConnectionView(ctk.CTkFrame):
             border_color=get_color("border/default"),
             checkmark_color=get_color("accent/on-primary"),
             checkbox_width=18, checkbox_height=18, corner_radius=4,
-            border_width=2,
+            border_width=2, command=self._update_name_field,
         )
         self._remember_me.select()
         self._remember_me.pack(anchor="w", pady=(0, 20))
+        # The name only matters for saved clusters, so it lives in its own
+        # frame that is shown/hidden with the checkbox.
+        self._name_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        self._name_entry = self._add_field(
+            self._name_frame, "Cluster name (optional)", "e.g. Work cluster")
+        self._update_name_field()
+
+    def _update_name_field(self) -> None:
+        """Show the cluster-name box only while "Remember me" is checked.
+
+        Author: Archer
+        """
+        if self._remember_me.get():
+            self._name_frame.pack(after=self._remember_me, fill="x")
+        else:
+            self._name_frame.pack_forget()
 
     def _build_signup_prompt(self, parent) -> None:
         """Add "Don't have a MongoDB account? Create an account" link row.
@@ -230,12 +293,19 @@ class ConnectionView(ctk.CTkFrame):
         link.pack(side="left")
 
     def _submit(self) -> None:
+        """Send the form to the App, with whether "Remember me" is checked.
+
+        Author: Archer (now sends the cluster name + remember-me flag)
+        """
         self._error_label.pack_forget()
-        password = self._password_entry.get()
-        self._password_entry.delete(0, "end")
-        self._submit_login(
-            self._uri_entry.get(), self._username_entry.get(), password
+        entry = SavedCluster(
+            cluster=self._uri_entry.get().strip(),
+            username=self._username_entry.get().strip(),
+            password=self._password_entry.get(),
+            name=self._name_entry.get().strip(),
         )
+        self._password_entry.delete(0, "end")
+        self._submit_login(entry, bool(self._remember_me.get()))
 
     def show_error(self, message: str) -> None:
         """Display a safe, readable login error above the Sign in button.
@@ -245,3 +315,13 @@ class ConnectionView(ctk.CTkFrame):
         self._error_label.configure(text=message)
         self._error_label.pack(anchor="w", pady=(0, 12),
                                before=self._sign_in_button)
+
+
+def _replace_text(entry: ctk.CTkEntry, text: str) -> None:
+    """Swap a text box's contents for `text`.
+
+    Author: Archer
+    """
+    entry.delete(0, "end")
+    if text:
+        entry.insert(0, text)

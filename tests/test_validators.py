@@ -111,3 +111,117 @@ def test_parse_documents_json_reports_whole_file_error_for_broken_json() -> None
 def test_parse_documents_json_rejects_json_lines_with_a_bad_line() -> None:
     with pytest.raises(ValueError, match="Invalid JSON"):
         validators.parse_documents_json('{"a": 1}\n{oops}')
+
+
+# --- Schema form values (Author: Archer) ---
+
+from bson import Decimal128, Int64  # noqa: E402
+
+from db_gui.db.schema import SchemaField  # noqa: E402
+
+
+@pytest.mark.parametrize("type_name, text, expected", [
+    ("string", " Ada ", "Ada"),
+    ("int", "42", 42),
+    ("long", "5", Int64(5)),
+    ("double", "2.5", 2.5),
+    ("decimal", "19.99", Decimal128("19.99")),
+    ("bool", "True", True),
+    ("bool", "false", False),
+    ("date", "2026-11-23",
+     datetime.datetime(2026, 11, 23, tzinfo=datetime.timezone.utc)),
+    ("objectId", "671d8e2f4a9b0c1234567890",
+     ObjectId("671d8e2f4a9b0c1234567890")),
+])
+def test_parse_field_value_converts_to_schema_type(type_name, text, expected):
+    value = validators.parse_field_value(SchemaField("a", type_name), text)
+
+    assert value == expected
+    assert type(value) is type(expected)
+
+
+@pytest.mark.parametrize("type_name, text, message", [
+    ("int", "4.5", "whole number"),
+    ("int", str(2**31), "too big"),
+    ("long", "x", "whole number"),
+    ("double", "nan", "number"),
+    ("double", "abc", "number"),
+    ("decimal", "abc", "number"),
+    ("decimal", "Infinity", "number"),
+    ("bool", "yes", "true or false"),
+    ("date", "23/11/2026", "YYYY-MM-DD"),
+    ("objectId", "123", "hex ObjectId"),
+])
+def test_parse_field_value_rejects_bad_text(type_name, text, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        validators.parse_field_value(SchemaField("a", type_name), text)
+
+
+def test_parse_field_value_empty_required_is_error() -> None:
+    with pytest.raises(ValueError, match="Required"):
+        validators.parse_field_value(SchemaField("a", "string", True), "  ")
+
+
+def test_parse_field_value_empty_optional_is_none() -> None:
+    assert validators.parse_field_value(SchemaField("a", "int"), "") is None
+
+
+@pytest.mark.parametrize("field, text, message", [
+    (SchemaField("a", "string", minimum=3), "ab", "at least 3 characters"),
+    (SchemaField("a", "string", maximum=2), "abc", "at most 2 characters"),
+    (SchemaField("a", "int", minimum=0), "-1", "at least 0"),
+    (SchemaField("a", "double", maximum=1.5), "2", "at most 1.5"),
+    (SchemaField("a", "decimal", minimum=1), "0.5", "at least 1"),
+])
+def test_parse_field_value_checks_min_max(field, text, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        validators.parse_field_value(field, text)
+
+
+def test_parse_field_value_accepts_value_inside_limits() -> None:
+    field = SchemaField("a", "int", minimum=0, maximum=10)
+
+    assert validators.parse_field_value(field, "10") == 10
+
+
+def test_parse_array_values_converts_each_item() -> None:
+    field = SchemaField("tags", "int", is_array=True)
+
+    assert validators.parse_array_values(field, ["1", " 2 "]) == [1, 2]
+
+
+def test_parse_array_values_allows_empty_list() -> None:
+    field = SchemaField("tags", "string", True, is_array=True)
+
+    assert validators.parse_array_values(field, []) == []
+
+
+@pytest.mark.parametrize("texts, message", [
+    (["1", ""], "Item 2 is empty"),
+    (["1", "x"], "Item 2: Must be a whole number"),
+    ([], "at least 1 items"),
+    (["1", "2", "3"], "at most 2 items"),
+])
+def test_parse_array_values_rejects_bad_items(texts, message) -> None:
+    field = SchemaField("tags", "int", is_array=True, minimum=1, maximum=2)
+
+    with pytest.raises(ValueError, match=message):
+        validators.parse_array_values(field, texts)
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("", None),
+    ("671d8e2f4a9b0c1234567890", ObjectId("671d8e2f4a9b0c1234567890")),
+    ("CUS-1", "CUS-1"),
+])
+def test_parse_id_text(text, expected) -> None:
+    assert validators.parse_id_text(text) == expected
+
+
+def test_parse_field_value_date_keeps_a_full_iso_time() -> None:
+    field = SchemaField("born", "date")
+
+    value = validators.parse_field_value(field, "2026-11-23T10:30:00")
+
+    assert value == datetime.datetime(2026, 11, 23, 10, 30,
+                                      tzinfo=datetime.timezone.utc)

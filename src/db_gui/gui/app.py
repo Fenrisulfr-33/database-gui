@@ -1,21 +1,34 @@
 """Root application window and view routing.
 
 Author: Archer (bumped default window size for the restyled login view;
-added the brand mark as the window icon)
+added the brand mark as the window icon; save remembered clusters to the
+local JSON file after a successful login; swapped the database home screen
+for the new DashboardView; rename now uses the styled FormDialog pop-up;
+all native messagebox prompts replaced with in-app MessageDialog pop-ups;
+databases now open the styled CollectionsView; cluster pages are swapped
+inside one persistent ClusterShell instead of rebuilding the whole window;
+document cards open the Edit document page)
 """
 
 from functools import partial
-from tkinter import messagebox
 
 import customtkinter as ctk
 from pymongo.errors import PyMongoError
 
 from ..db.connection import MongoConnection
+from ..utils.saved_clusters import (SavedCluster, load_saved_clusters,
+                                    save_cluster)
 from .assets import BRAND_MARK, load_image
 from .views.connection_view import ConnectionView
-from .views.database_view import DatabaseView
-from .views.collection_view import CollectionView
-from .views.document_view import DocumentActions, DocumentView
+from .views.dashboard_actions import DashboardActions
+from .views.dashboard_view import DashboardView
+from .views.add_document_view import AddDocumentPage, AddDocumentView
+from .views.cluster_shell import ClusterShell
+from .views.collections_view import CollectionsView
+from .views.document_view import DocumentPage, DocumentView
+from .widgets.form_dialog import FormDialog, FormField, FormSpec
+from .widgets.message_dialog import MessageSpec, show_dialog
+from .widgets.schema_tab import SchemaActions
 
 
 class App(ctk.CTk):
@@ -29,11 +42,17 @@ class App(ctk.CTk):
 
         self.title("Arrow_>")
         self._set_window_icon()
-        # Tall enough for the login card (design/Login.png) without clipping.
-        self.geometry("1100x820")
+        # Tall enough for the login card (design/Login.png) plus the
+        # saved-cluster picker and cluster-name box without clipping.
+        # Wide enough for the dashboard table (design/Dashboard.png).
+        self.geometry("1280x940")
         self.minsize(600, 400)
         self._connection: MongoConnection | None = None
+        # The login that's currently connected (names shown on the dashboard).
+        self._login: SavedCluster | None = None
         self._current_view = None
+        # Header + sidebar + status bar while connected (None at login).
+        self._shell: ClusterShell | None = None
 
         self._build_layout()
 
@@ -51,9 +70,16 @@ class App(ctk.CTk):
         self._iconbitmap_method_called = True
 
     def _build_layout(self) -> None:
-        self._show_view(
-            ConnectionView(self, self._connect_to_cluster)
-        )
+        self._show_login()
+
+    def _show_login(self) -> None:
+        """Show the login screen with the latest saved clusters.
+
+        Author: Archer (also forgets the cluster shell, which is destroyed)
+        """
+        self._shell = None
+        self._show_view(ConnectionView(
+            self, self._connect_to_cluster, load_saved_clusters()))
 
     def _show_view(self, view) -> None:
         if self._current_view is not None:
@@ -61,10 +87,14 @@ class App(ctk.CTk):
         self._current_view = view
         view.pack(expand=True, fill="both")
 
-    def _connect_to_cluster(self, uri: str, username: str, password: str) -> None:
+    def _connect_to_cluster(self, entry: SavedCluster, remember: bool) -> None:
+        """Try the login; on success, save it (if remember) and go on.
+
+        Author: Archer (takes a SavedCluster + remember-me flag)
+        """
         try:
-            connection = MongoConnection(uri)
-            databases = connection.connect(username, password)
+            connection = MongoConnection(entry.cluster)
+            connection.connect(entry.username, entry.password)
         except ValueError as error:
             self._current_view.show_error(str(error))
         except PyMongoError:
@@ -73,51 +103,138 @@ class App(ctk.CTk):
             )
         else:
             self._connection = connection
-            self._database_view(databases)
+            self._login = entry
+            # Only remember logins that worked, and only when asked to.
+            if remember:
+                self._remember_cluster(entry)
+            self._show_dashboard()
+
+    def _remember_cluster(self, entry: SavedCluster) -> None:
+        """Save the login to the local JSON file; warn (but carry on) if
+        the file can't be written.
+
+        Author: Archer
+        """
+        try:
+            save_cluster(entry)
+        except ValueError as error:
+            show_dialog(self, MessageSpec("Cluster not saved", str(error),
+                                          "warning"))
             
-    def _database_view(
-        self, databases: list[str]
-    ) -> None:
-        self._show_view(
-            DatabaseView(
-                self,
-                databases,
-                self._create_database,
-                self._disconnect,
-                self._collections_view,
-                self._rename_database,
-            )
-        )
-        
-    def _collections_view(
-        self, 
-        database,
-    ) -> None:
-        self._show_view(
-            CollectionView(
-            self, 
-            database, 
-            self._return_to_database_view,
-            self._list_collections,
-            self._create_collection,
-            self._documents_view
-            )
+    def _make_actions(self) -> DashboardActions:
+        """Everything the cluster pages can ask for, bound to this connection.
+
+        Author: Archer
+        """
+        connection = self._connection
+        return DashboardActions(
+            load_databases=connection.list_database_stats,
+            list_database_names=connection.list_databases,
+            load_database_stats=connection.get_database_stats,
+            load_collection_stats=connection.list_collection_stats,
+            load_status=connection.get_cluster_status,
+            list_collections=connection.list_collections,
+            go_home=self._show_dashboard,
+            open_database=self._collections_view,
+            open_collection=self._documents_view,
+            disconnect=self._disconnect,
+            create_database=self._create_database,
+            rename_database=self._rename_database,
+            create_collection=connection.create_collection,
+            rename_collection=connection.rename_collection,
         )
 
+    def _show_dashboard(self) -> None:
+        """Show the dashboard for the current connection.
+
+        Author: Archer (swaps the main area only)
+        """
+        self._show_cluster_page(DashboardView)
+
+    def _show_cluster_page(self, make_page) -> None:
+        """Show a cluster page, swapping ONLY the main area.
+
+        The shell (header, sidebar, status bar) is built the first time
+        after login and then reused, so moving between pages doesn't
+        rebuild the whole window. `make_page(shell)` builds the page.
+
+        Author: Archer
+        """
+        if self._shell is None:
+            self._shell = ClusterShell(self, self._login, self._make_actions())
+            self._show_view(self._shell)
+        self._shell.show_page(make_page)
+
+    def _collections_view(self, database: str) -> None:
+        """Show the Collections page for one database.
+
+        Author: Archer (styled CollectionsView replaces CollectionView;
+        swaps the main area only)
+        """
+        self._show_cluster_page(lambda shell: CollectionsView(shell, database))
+
     def _documents_view(self, database: str, collection: str) -> None:
-        """Open the screen for one collection."""
-        # partial fills in the database and collection names for the view
-        actions = DocumentActions(
-            back=lambda: self._collections_view(database),
+        """Open the Documents page for one collection.
+
+        Author: Archer (restyled page on the shared cluster frame; swaps the
+        main area only)
+        """
+        connection = self._connection
+        # partial fills in the database and collection names for the page
+        page = DocumentPage(
+            database, collection,
             list_documents=partial(
                 self._connection.list_documents, database, collection),
-            add_document=partial(
-                self._connection.add_document, database, collection),
+            open_add_document=partial(
+                self._document_editor_view, database, collection),
+            # called with the document to edit
+            open_edit_document=partial(
+                self._document_editor_view, database, collection),
             add_documents=partial(
                 self._connection.add_documents, database, collection),
+            schema=self._schema_actions(database, collection),
+            find_mismatches=partial(
+                connection.find_schema_mismatches, database, collection),
         )
-        self._show_view(
-            DocumentView(self, f"{database}.{collection}", actions))
+        self._show_cluster_page(lambda shell: DocumentView(shell, page))
+
+    def _document_editor_view(
+        self, database: str, collection: str, original: dict | None = None
+    ) -> None:
+        """Show the Add document page, or the Edit document page when
+        `original` (the stored document) is given.
+
+        Author: Archer (replaces the Add document pop-up; swaps the main
+        area only; also opens documents for editing)
+        """
+        connection = self._connection
+        save = (connection.add_document if original is None
+                else connection.replace_document)
+        page = AddDocumentPage(
+            database, collection,
+            save_document=partial(save, database, collection),
+            get_schema=partial(
+                connection.get_collection_schema, database, collection),
+            original=original,
+        )
+        self._show_cluster_page(lambda shell: AddDocumentView(shell, page))
+
+    def _schema_actions(self, database: str, collection: str) -> SchemaActions:
+        """The db/ schema functions, set up for one collection.
+
+        Author: Archer
+        """
+        connection = self._connection
+        return SchemaActions(
+            get_schema=partial(
+                connection.get_collection_schema, database, collection),
+            save_schema=partial(
+                connection.set_collection_schema, database, collection),
+            remove_schema=partial(
+                connection.remove_collection_schema, database, collection),
+            count_mismatches=partial(
+                connection.count_schema_mismatches, database, collection),
+        )
 
     def _create_database(
         self, database_name: str, collection_name: str
@@ -131,26 +248,8 @@ class App(ctk.CTk):
         if self._connection is not None:
             self._connection.close()
             self._connection = None
-        self._show_view(ConnectionView(self, self._connect_to_cluster))
-
-    def _list_collections(
-            self, database_name
-        ) -> list[str]:
-            return self._connection.list_collections(database_name)
-        
-    def _return_to_database_view(
-        self,
-    ) -> None:
-        databases = self._connection.list_databases()
-        self._database_view(databases)
-            
-    def _create_collection(
-        self, database_name: str, collection_name: str
-    ) -> list[str]:
-        if self._connection is None:
-            raise ValueError(
-                "Connect to a cluster before creating a database.")
-        return self._connection.create_collection(database_name,collection_name)
+        self._login = None
+        self._show_login()
 
     def _rename_database(self, source_name: str) -> None:
         target_name = self._prompt_database_name(source_name)
@@ -158,9 +257,9 @@ class App(ctk.CTk):
             return
         connection = self._connection
         if connection is None:
-            messagebox.showerror(
-                "Not connected", "Connect to a cluster before renaming.", parent=self
-            )
+            show_dialog(self, MessageSpec(
+                "Not connected", "Connect to a cluster before renaming.",
+                "error"))
             return
         if not self._confirm_database_rename(connection, source_name, target_name):
             return
@@ -174,20 +273,23 @@ class App(ctk.CTk):
         )
 
     def _prompt_database_name(self, source_name: str) -> str | None:
-        dialog = ctk.CTkInputDialog(
-            text=f"Enter a new name for '{source_name}':",
+        """Ask for the new name in the Rename database pop-up
+        (design/Rename database — pop-up.png). None = cancelled.
+
+        Author: Archer (styled pop-up replaces CTkInputDialog; empty and
+        unchanged names are caught inside the pop-up)
+        """
+        spec = FormSpec(
             title="Rename database",
-        )
-        target_name = dialog.get_input()
-        if target_name is None:
-            return None
-        target_name = target_name.strip()
-        if not target_name:
-            messagebox.showerror(
-                "Invalid name", "A database name is required.", parent=self
-            )
-            return None
-        return target_name
+            subtitle="Enter a new name for this database.",
+            submit_text="Rename",
+            fields=[FormField("New database name", "",
+                              "Choose a unique name for this connection.",
+                              initial=source_name)])
+        dialog = FormDialog(self, spec, lambda values: (
+            "Choose a different name." if values[0] == source_name else None))
+        values = dialog.wait_for_values()
+        return values[0] if values else None
 
     def _confirm_database_rename(
         self,
@@ -195,28 +297,27 @@ class App(ctk.CTk):
         source_name: str,
         target_name: str,
     ) -> bool:
+        """Styled Yes/No confirm (design/Rename confirm popups.png).
+
+        Author: Archer (in-app pop-up replaces messagebox.askyesno; the
+        first line of the warning becomes the bold heading)
+        """
         estimate = connection.get_database_size(source_name)
         warning = self._build_rename_warning(source_name, target_name, estimate)
-        return messagebox.askyesno("Confirm database rename", warning, parent=self)
+        heading, _, details = warning.partition("\n\n")
+        return show_dialog(self, MessageSpec(
+            "Confirm database rename", details, "question", heading))
 
     def _report_rename_failure(
         self, connection: MongoConnection, error: Exception
     ) -> None:
-        messagebox.showerror(
+        show_dialog(self, MessageSpec(
             "Database rename failed",
             f"{error}\n\nCheck the cluster state before retrying. If the "
             "message includes a local recovery archive path, keep that file.",
-            parent=self,
-        )
-        try:
-            self._database_view(connection.list_databases())
-        except PyMongoError:
-            messagebox.showwarning(
-                "Database list unavailable",
-                "The database list could not be refreshed. Reconnect to "
-                "check the cluster state.",
-                parent=self,
-            )
+            "error"))
+        # The dashboard shows its own error if the cluster can't be read.
+        self._show_dashboard()
 
     def _report_rename_success(
         self,
@@ -225,35 +326,27 @@ class App(ctk.CTk):
         target_name: str,
         archive_path: str | None,
     ) -> None:
-        try:
-            self._database_view(connection.list_databases())
-        except PyMongoError:
-            messagebox.showwarning(
-                "Database renamed",
-                "The rename succeeded, but the database list could not be "
-                "refreshed. Reconnect to see the updated list.",
-                parent=self,
-            )
-            return
+        self._show_dashboard()
         self._show_rename_outcome(source_name, target_name, archive_path)
 
     def _show_rename_outcome(
         self, source_name: str, target_name: str, archive_path: str | None
     ) -> None:
+        """Styled result pop-up (design/Rename confirm popups.png).
+
+        Author: Archer (in-app pop-up replaces messagebox)
+        """
         if archive_path is None:
-            messagebox.showinfo(
+            show_dialog(self, MessageSpec(
                 "Database renamed",
                 f"'{source_name}' was saved to a local BSON archive, verified, "
-                f"and restored as '{target_name}'. The original was removed.",
-                parent=self,
-            )
+                f"and restored as '{target_name}'. The original was removed."))
         else:
-            messagebox.showwarning(
+            show_dialog(self, MessageSpec(
                 "Database renamed; local cleanup needed",
                 f"'{source_name}' was restored as '{target_name}', but the "
                 f"temporary local archive could not be removed:\n{archive_path}",
-                parent=self,
-            )
+                "warning"))
 
     @staticmethod
     def _build_rename_warning(

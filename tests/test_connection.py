@@ -417,3 +417,362 @@ def test_add_documents_requires_connection() -> None:
 
     with pytest.raises(ValueError, match="Connect to a MongoDB cluster"):
         service.add_documents("shop", "items", [{"a": 1}])
+
+
+# --- dashboard stats (Author: Archer) ---
+
+class _StatsDatabase:
+    """Stands in for a pymongo Database that answers dbStats."""
+
+    def __init__(self, stats):
+        self._stats = stats
+
+    def command(self, name):
+        if isinstance(self._stats, Exception):
+            raise self._stats
+        return self._stats
+
+
+class _StatsClient:
+    def __init__(self, stats_by_name):
+        self._stats_by_name = stats_by_name
+
+    def list_database_names(self):
+        return list(self._stats_by_name)
+
+    def get_database(self, name):
+        return _StatsDatabase(self._stats_by_name[name])
+
+
+def _stats_service(stats_by_name) -> connection.MongoConnection:
+    service = connection.MongoConnection("mongodb+srv://u:p@c0.example.net/?x=1")
+    service._client = _StatsClient(stats_by_name)
+    return service
+
+
+def test_get_database_stats_reads_db_stats_and_adds_indexes() -> None:
+    service = _stats_service({"shop": {
+        "collections": 3, "objects": 10.0, "dataSize": 500.0,
+        "storageSize": 800.0, "indexSize": 200.0}})
+
+    stats = service.get_database_stats("shop")
+
+    assert stats == connection.DatabaseStats("shop", 3, 10, 500, 1000,
+                                             index_size=200)
+
+
+def test_get_database_stats_returns_blanks_when_command_fails() -> None:
+    from pymongo.errors import OperationFailure
+    service = _stats_service({"local": OperationFailure("not authorized")})
+
+    assert service.get_database_stats("local") == connection.DatabaseStats("local")
+
+
+def test_list_database_stats_is_sorted_by_name() -> None:
+    service = _stats_service({"b": {}, "a": {}})
+
+    assert [db.name for db in service.list_database_stats()] == ["a", "b"]
+
+
+def test_host_from_uri_strips_credentials_and_options() -> None:
+    assert connection._host_from_uri(
+        "mongodb+srv://u:p@c0.example.net/?x=1") == "c0.example.net"
+    assert connection._host_from_uri("mongodb://localhost:27017") == \
+        "localhost:27017"
+
+
+def test_get_cluster_status_reports_ping_version_and_replica_set() -> None:
+    class Admin:
+        def command(self, name):
+            return {"setName": "rs0"} if name == "hello" else {"ok": 1}
+
+    class Client:
+        admin = Admin()
+
+        def server_info(self):
+            return {"version": "7.0.14"}
+
+    service = connection.MongoConnection("mongodb://c0.example.net")
+    service._client = Client()
+
+    status = service.get_cluster_status()
+
+    assert status.host == "c0.example.net"
+    assert status.ping_ms is not None
+    assert (status.version, status.replica_set) == ("7.0.14", "rs0")
+
+
+# --- Collections page (Author: Archer) ---
+
+def test_count_fields_unions_top_level_keys() -> None:
+    # mongomock can't run $collStats, so test the field count on its own.
+    _service, client = _connected_service()
+    client["shop"]["orders"].insert_many([{"a": 1, "b": 2}, {"a": 3, "c": 4}])
+
+    assert connection._count_fields(client["shop"]["orders"]) == 4  # _id,a,b,c
+
+
+def test_get_collection_stats_keeps_blanks_when_coll_stats_fails() -> None:
+    from pymongo.errors import OperationFailure
+
+    class Collection:
+        def find(self, _filter, limit):
+            return [{"_id": 1, "x": 1}]
+
+        def aggregate(self, _pipeline):
+            raise OperationFailure("views have no storage stats")
+
+    service = connection.MongoConnection("mongodb://c0")
+    service._client = {"shop": {"v": Collection()}}
+
+    stats = service.get_collection_stats("shop", "v")
+
+    assert stats == connection.CollectionStats("v", fields=2)
+
+
+def test_get_collection_stats_reads_storage_stats() -> None:
+    class Collection:
+        def find(self, _filter, limit):
+            return []
+
+        def aggregate(self, _pipeline):
+            return iter([{"storageStats": {
+                "count": 5, "size": 500.0, "nindexes": 2,
+                "totalIndexSize": 64.0}}])
+
+    service = connection.MongoConnection("mongodb://c0")
+    service._client = {"shop": {"orders": Collection()}}
+
+    assert service.get_collection_stats("shop", "orders") == \
+        connection.CollectionStats("orders", 5, 500, 2, 64, 0)
+
+
+def test_rename_collection_renames_in_place() -> None:
+    service, client = _connected_service()
+    client["shop"]["orders"].insert_one({"a": 1})
+
+    service.rename_collection("shop", "orders", " sales ")
+
+    assert client["shop"].list_collection_names() == ["sales"]
+
+
+@pytest.mark.parametrize("name", ["", "bad$name", "system.users"])
+def test_rename_collection_rejects_invalid_names(name: str) -> None:
+    service, _client = _connected_service()
+
+    with pytest.raises(ValueError):
+        service.rename_collection("shop", "orders", name)
+
+
+def test_rename_collection_reports_taken_name() -> None:
+    from pymongo.errors import OperationFailure
+
+    class Collection:
+        def rename(self, _new):
+            raise OperationFailure("exists", code=connection.NAMESPACE_EXISTS)
+
+    service = connection.MongoConnection("mongodb://c0")
+    service._client = {"shop": {"orders": Collection()}}
+
+    with pytest.raises(ValueError, match="already exists"):
+        service.rename_collection("shop", "orders", "sales")
+
+
+# --- Collection schemas (Author: Archer) ---
+# mongomock can't run collMod or $jsonSchema, so these use small fakes that
+# record what MongoConnection sends to MongoDB.
+
+STRICT_SCHEMA = {"bsonType": "object", "additionalProperties": False,
+                 "properties": {"_id": {}, "name": {"bsonType": "string"}},
+                 "required": ["name"]}
+
+
+class SchemaCollection:
+    """Record the queries sent to one collection."""
+
+    def __init__(self, found: list[dict]) -> None:
+        self.found = found
+        self.queries: list[dict] = []
+
+    def count_documents(self, query: dict) -> int:
+        self.queries.append(query)
+        return len(self.found)
+
+    def find(self, query: dict, projection: dict) -> list[dict]:
+        self.queries.append(query)
+        return self.found
+
+
+class SchemaDatabase:
+    """Fake database whose collection options hold `validator`."""
+
+    def __init__(self, validator=None, found=None, exists=True) -> None:
+        options = {} if validator is None else {"validator": validator}
+        self.infos = [{"name": "people", "options": options}] if exists else []
+        self.commands: list[tuple] = []
+        self.collection = SchemaCollection(found or [])
+
+    def list_collections(self, filter: dict) -> list[dict]:
+        assert filter == {"name": "people"}
+        return self.infos
+
+    def command(self, *args, **kwargs) -> dict:
+        self.commands.append((args, kwargs))
+        return {"ok": 1}
+
+    def __getitem__(self, _name: str) -> SchemaCollection:
+        return self.collection
+
+
+def _schema_service(database: SchemaDatabase) -> connection.MongoConnection:
+    service = connection.MongoConnection("mongodb://c0")
+    service._client = {"shop": database}
+    return service
+
+
+def test_get_collection_schema_returns_inner_json_schema() -> None:
+    service = _schema_service(SchemaDatabase({"$jsonSchema": STRICT_SCHEMA}))
+
+    assert service.get_collection_schema("shop", "people") == STRICT_SCHEMA
+
+
+def test_get_collection_schema_returns_none_without_validator() -> None:
+    service = _schema_service(SchemaDatabase())
+
+    assert service.get_collection_schema("shop", "people") is None
+
+
+def test_get_collection_schema_rejects_query_validators() -> None:
+    validator = {"$jsonSchema": STRICT_SCHEMA, "age": {"$gt": 0}}
+    service = _schema_service(SchemaDatabase(validator))
+
+    with pytest.raises(connection.UnsupportedSchemaError):
+        service.get_collection_schema("shop", "people")
+
+
+def test_get_collection_schema_reports_missing_collection() -> None:
+    service = _schema_service(SchemaDatabase(exists=False))
+
+    with pytest.raises(ValueError, match="doesn't exist"):
+        service.get_collection_schema("shop", "people")
+
+
+def test_set_collection_schema_saves_strict_validator() -> None:
+    database = SchemaDatabase()
+
+    _schema_service(database).set_collection_schema(
+        "shop", "people", STRICT_SCHEMA)
+
+    assert database.commands == [(
+        ("collMod", "people"),
+        {"validator": {"$jsonSchema": STRICT_SCHEMA},
+         "validationLevel": "strict", "validationAction": "error"},
+    )]
+
+
+def test_set_collection_schema_rejects_unsupported_before_saving() -> None:
+    database = SchemaDatabase()
+    schema = dict(STRICT_SCHEMA, title="extra")
+
+    with pytest.raises(connection.UnsupportedSchemaError):
+        _schema_service(database).set_collection_schema("shop", "people", schema)
+    assert database.commands == []
+
+
+def test_set_collection_schema_reports_server_rejection() -> None:
+    from pymongo.errors import OperationFailure
+
+    database = SchemaDatabase()
+
+    def refuse(*_args, **_kwargs):
+        raise OperationFailure("bad", details={"errmsg": "not allowed"})
+
+    database.command = refuse
+
+    with pytest.raises(ValueError, match="not allowed"):
+        _schema_service(database).set_collection_schema(
+            "shop", "people", STRICT_SCHEMA)
+
+
+def test_remove_collection_schema_clears_validator() -> None:
+    database = SchemaDatabase({"$jsonSchema": STRICT_SCHEMA})
+
+    _schema_service(database).remove_collection_schema("shop", "people")
+
+    assert database.commands == [(
+        ("collMod", "people"), {"validator": {}, "validationLevel": "off"})]
+
+
+def test_count_schema_mismatches_counts_documents_failing_schema() -> None:
+    database = SchemaDatabase(found=[{"_id": 1}, {"_id": 2}])
+
+    count = _schema_service(database).count_schema_mismatches(
+        "shop", "people", STRICT_SCHEMA)
+
+    assert count == 2
+    assert database.collection.queries == [
+        {"$nor": [{"$jsonSchema": STRICT_SCHEMA}]}]
+
+
+def test_find_schema_mismatches_checks_only_given_ids() -> None:
+    database = SchemaDatabase({"$jsonSchema": STRICT_SCHEMA},
+                              found=[{"_id": 2}])
+
+    broken = _schema_service(database).find_schema_mismatches(
+        "shop", "people", [1, 2])
+
+    assert broken == {2}
+    assert database.collection.queries == [
+        {"_id": {"$in": [1, 2]}, "$nor": [{"$jsonSchema": STRICT_SCHEMA}]}]
+
+
+def test_find_schema_mismatches_is_empty_without_schema() -> None:
+    database = SchemaDatabase(found=[{"_id": 2}])
+
+    assert _schema_service(database).find_schema_mismatches(
+        "shop", "people", [1, 2]) == set()
+    assert database.collection.queries == []
+
+
+def test_add_document_reports_schema_rejection() -> None:
+    from pymongo.errors import WriteError
+
+    class Collection:
+        def insert_one(self, _document):
+            raise WriteError("failed",
+                             code=connection.DOCUMENT_VALIDATION_FAILURE)
+
+    service = connection.MongoConnection("mongodb://c0")
+    service._client = {"shop": {"people": Collection()}}
+
+    with pytest.raises(ValueError, match="doesn't match"):
+        service.add_document("shop", "people", {"name": 5})
+
+
+# --- replace_document (Author: Archer) ---
+
+
+def test_replace_document_overwrites_whole_document(
+    mongo_service: connection.MongoConnection,
+) -> None:
+    mongo_service.add_document("shop", "items", {"_id": 1, "name": "pen",
+                                                 "color": "blue"})
+
+    mongo_service.replace_document("shop", "items", {"_id": 1, "name": "ink"})
+
+    assert mongo_service.list_documents("shop", "items") == [
+        {"_id": 1, "name": "ink"}]
+
+
+def test_replace_document_requires_id(
+    mongo_service: connection.MongoConnection,
+) -> None:
+    with pytest.raises(ValueError, match="keep its _id"):
+        mongo_service.replace_document("shop", "items", {"name": "ink"})
+
+
+def test_replace_document_reports_deleted_document(
+    mongo_service: connection.MongoConnection,
+) -> None:
+    with pytest.raises(ValueError, match="no longer exists"):
+        mongo_service.replace_document("shop", "items", {"_id": 99})
