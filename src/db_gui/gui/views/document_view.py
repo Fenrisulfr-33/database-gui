@@ -16,6 +16,11 @@ from ...utils.formatters import format_document_preview
 from ...utils.validators import parse_documents_json
 from ..widgets.schema_tab import SchemaActions, SchemaTab
 
+# Author: Archer - rows for documents that break the collection's schema
+BROKEN_LABEL = "⚠  Doesn't match schema"
+BROKEN_ROW_COLORS = ("#f6d5d3", "#3a2224")  # (light, dark)
+ERROR_COLOR = "#d9534f"
+
 
 @dataclass
 class DocumentActions:
@@ -28,6 +33,8 @@ class DocumentActions:
     add_documents: Callable[[list[dict]], ImportResult]
     # Author: Archer - None hides the Schema tab
     schema: SchemaActions | None = None
+    # Author: Archer - (ids) -> set of ids that break the schema
+    find_mismatches: Callable[[list], set] | None = None
 
 
 class DocumentView(ctk.CTkFrame):
@@ -63,6 +70,8 @@ class DocumentView(ctk.CTkFrame):
             self.schema_tab = SchemaTab(self.tabs.add("Schema"),
                                         self._actions.schema)
             self.schema_tab.pack(fill="both", expand=True)
+            # Saving or removing the schema changes which rows are marked.
+            self.schema_tab.on_change = self._load_documents
 
     def _build_documents_tab(self, tab: ctk.CTkFrame) -> None:
         """Status line, document list and buttons.
@@ -103,21 +112,49 @@ class DocumentView(ctk.CTkFrame):
         self._populate_documents(documents)
 
     def _populate_documents(self, documents: list[dict]) -> None:
-        """Clear the list and draw it again."""
+        """Clear the list and draw it again.
+
+        Author: Archer (marks documents that break the schema)
+        """
         for child in self._document_list.winfo_children():
             child.destroy()
+        broken = self._find_broken(documents)
         for document in documents:
-            self._add_document_row(document)
+            self._add_document_row(document, document.get("_id") in broken)
         if not documents:
             ctk.CTkLabel(
                 self._document_list, text="No documents were found."
             ).pack(pady=20)
-        self._update_status(len(documents))
+        self._update_status(len(documents), len(broken))
 
-    def _add_document_row(self, document: dict) -> None:
-        """Show one document as a grey row."""
-        card = ctk.CTkFrame(self._document_list, fg_color=("gray85", "gray20"))
+    def _find_broken(self, documents: list[dict]) -> set:
+        """Ids of the shown documents that don't match the schema.
+
+        If the check fails, nothing is marked (the list still shows).
+
+        Author: Archer
+        """
+        if self._actions.find_mismatches is None or not documents:
+            return set()
+        ids = [document["_id"] for document in documents if "_id" in document]
+        try:
+            return self._actions.find_mismatches(ids)
+        except (ValueError, PyMongoError):
+            return set()
+
+    def _add_document_row(self, document: dict, broken: bool = False) -> None:
+        """Show one document as a grey row, red-tinted if it breaks the schema.
+
+        Author: Archer (added the "Doesn't match schema" marker)
+        """
+        card = ctk.CTkFrame(
+            self._document_list,
+            fg_color=BROKEN_ROW_COLORS if broken else ("gray85", "gray20"))
         card.pack(fill="x", pady=4)
+        if broken:
+            ctk.CTkLabel(card, text=BROKEN_LABEL, text_color=ERROR_COLOR,
+                         font=ctk.CTkFont(size=12, weight="bold")).pack(
+                side="right", padx=10)
         ctk.CTkLabel(
             card,
             text=format_document_preview(document),
@@ -125,17 +162,22 @@ class DocumentView(ctk.CTkFrame):
             font=ctk.CTkFont(family="Courier", size=12),
         ).pack(fill="x", padx=10, pady=8)
 
-    def _update_status(self, count: int) -> None:
-        """Show how many documents there are."""
+    def _update_status(self, count: int, broken: int = 0) -> None:
+        """Show how many documents there are, and how many break the schema.
+
+        Author: Archer (added the schema count)
+        """
         if count >= DOCUMENT_LIST_LIMIT:
             text = f"Showing the newest {DOCUMENT_LIST_LIMIT} documents."
         else:
             text = f"{count} document{'' if count == 1 else 's'}"
+        if broken:
+            text += f" · {broken} {'doesn' if broken == 1 else 'don'}'t match the schema"
         self._status_label.configure(text=text)
 
     def _show_message(self, text: str, is_error: bool = False) -> None:
         """Show a red error or green success message."""
-        color = "#d9534f" if is_error else "#2e8b57"
+        color = ERROR_COLOR if is_error else "#2e8b57"
         self._message_label.configure(text=text, text_color=color)
 
     def _choose_file(self) -> str:

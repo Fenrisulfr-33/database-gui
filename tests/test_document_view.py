@@ -100,3 +100,63 @@ def test_import_file_shows_error_for_bad_json(root, tmp_path) -> None:
 
     assert stored == []
     assert "Invalid JSON" in view._message_label.cget("text")
+
+
+# --- Schema mismatch markers (Author: Archer) ---
+
+
+def make_marked_view(root, stored, find_mismatches):
+    actions = document_view.DocumentActions(
+        back=lambda: None,
+        list_documents=lambda: list(stored),
+        open_add_document=lambda: None,
+        add_documents=lambda documents: ImportResult(0, 0, list(stored)),
+        find_mismatches=find_mismatches,
+    )
+    return document_view.DocumentView(root, "shop.items", actions)
+
+
+def marked_texts(view) -> list[str]:
+    return [widget.cget("text") for widget in _all_widgets(view._document_list)
+            if isinstance(widget, document_view.ctk.CTkLabel)
+            and widget.cget("text") == document_view.BROKEN_LABEL]
+
+
+def test_documents_that_break_schema_are_marked(root) -> None:
+    asked: list = []
+
+    def find(ids):
+        asked.append(ids)
+        return {2}
+
+    view = make_marked_view(root, [{"_id": 1}, {"_id": 2}], find)
+
+    assert asked == [[1, 2]]
+    assert len(marked_texts(view)) == 1
+    assert view._status_label.cget("text") == (
+        "2 documents · 1 doesn't match the schema")
+
+
+def test_status_counts_several_mismatches(root) -> None:
+    view = make_marked_view(root, [{"_id": 1}, {"_id": 2}], lambda ids: {1, 2})
+
+    assert view._status_label.cget("text") == (
+        "2 documents · 2 don't match the schema")
+
+
+def test_no_markers_when_check_fails(root) -> None:
+    from pymongo.errors import PyMongoError
+
+    def fail(_ids):
+        raise PyMongoError("down")
+
+    view = make_marked_view(root, [{"_id": 1}], fail)
+
+    assert marked_texts(view) == []
+    assert view._status_label.cget("text") == "1 document"
+
+
+def test_no_markers_without_mismatch_check(root) -> None:
+    view = make_view(root, [{"_id": 1}])
+
+    assert marked_texts(view) == []

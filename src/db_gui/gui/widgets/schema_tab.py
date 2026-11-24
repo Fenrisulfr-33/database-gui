@@ -109,6 +109,7 @@ class SchemaTab(ctk.CTkFrame):
         self._actions = actions
         self.rows: list[FieldRow] = []
         self.has_schema = False
+        self.on_change: Callable[[], None] | None = None  # after save/remove
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
         self._build_toggle()
@@ -305,6 +306,7 @@ class SchemaTab(ctk.CTkFrame):
         self.has_schema = True
         self._update_remove_button()
         self.show_message("Schema saved.")
+        self._notify_change()
 
     def _confirm_mismatches(self, schema: dict) -> bool:
         """Ask before saving when existing documents would break the schema.
@@ -339,6 +341,15 @@ class SchemaTab(ctk.CTkFrame):
         self.has_schema = False
         self._update_remove_button()
         self.show_message("Schema removed. The collection is free-form again.")
+        self._notify_change()
+
+    def _notify_change(self) -> None:
+        """Tell the documents screen so it can re-mark its rows.
+
+        Author: Archer
+        """
+        if self.on_change is not None:
+            self.on_change()
 
     def _update_remove_button(self) -> None:
         """Remove schema only works when there is one.

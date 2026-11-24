@@ -208,3 +208,27 @@ def test_remove_row_drops_it(root) -> None:
     tab._remove_row(tab.rows[0])
 
     assert tab.rows == []
+
+
+def test_save_and_remove_notify_documents_screen(root, answers) -> None:
+    """Author: Archer"""
+    tab, _store = make_tab(root)
+    changes: list = []
+    tab.on_change = lambda: changes.append(1)
+    tab.add_row().name.insert(0, "name")
+
+    tab.save()
+    tab.remove()
+
+    assert changes == [1, 1]
+
+
+def test_failed_save_does_not_notify(root) -> None:
+    """Author: Archer"""
+    tab, _store = make_tab(root)
+    changes: list = []
+    tab.on_change = lambda: changes.append(1)
+
+    tab.save()  # no fields -> refused
+
+    assert changes == []

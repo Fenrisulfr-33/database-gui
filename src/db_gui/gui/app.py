@@ -168,6 +168,8 @@ class App(ctk.CTk):
             add_documents=partial(
                 self._connection.add_documents, database, collection),
             schema=self._schema_actions(database, collection),
+            find_mismatches=partial(
+                self._connection.find_schema_mismatches, database, collection),
         )
         self._show_view(
             DocumentView(self, f"{database}.{collection}", actions))

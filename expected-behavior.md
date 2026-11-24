@@ -223,7 +223,9 @@ Clarifications (insert form, built):
 A schema can be added to a collection that already has documents that don't match (after the warning above). MongoDB keeps those documents, but rejects any update to them until they match.
 
 - The documents page marks these documents with an **error indicator** ("Doesn't match schema"). They are found with a `$nor: [{ $jsonSchema: ... }]` query, so MongoDB does the checking.
-- Opening one in the edit form highlights the bad fields in red, and saving is refused until they're fixed.
+- Marked rows are tinted red with "⚠ Doesn't match schema", and the status line adds "· N don't match the schema". Only the documents on screen (the newest 100) are checked.
+- The markers refresh after the schema is saved or removed in the Schema tab, and after documents are added. If the check fails, the list still shows, just without markers.
+- Opening one in the edit form highlights the bad fields in red, and saving is refused until they're fixed. *(Deferred with the edit form.)*
 
 ### Schema flow
 
