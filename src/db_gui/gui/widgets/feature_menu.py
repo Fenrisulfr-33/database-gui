@@ -6,8 +6,9 @@ A small borderless card that pops up under the "···" button: one row per
 feature (icon + label, green highlight on hover), a divider, then Close.
 It closes on Close, Esc, a click outside it, or after running a feature.
 
-To add a feature, add a MenuItem in DatabaseRow.build_menu_items()
-(widgets/database_table.py) and an icon here in ICONS if it needs a new one.
+To add a feature, add a MenuItem to the page's TableConfig.menu_items
+(views/dashboard_view.py or views/collections_view.py) and an icon here in
+ICONS if it needs a new one.
 """
 
 import tkinter as tk

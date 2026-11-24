@@ -2,6 +2,9 @@
 
 Author: Archer
 
+Author note: StatCards is generic; database_card_texts and
+collection_card_texts turn stats into card text for each page.
+
 Each piece is built empty and filled in by a set_* method, so the dashboard
 can call those again on Refresh without rebuilding the widgets.
 """
@@ -12,12 +15,12 @@ import customtkinter as ctk
 
 from ...utils.formatters import format_bytes, format_compact_count, format_count
 from ..theme import get_color
-from .database_table import SYSTEM_DATABASES
+from .stats_table import SYSTEM_DATABASES
 from .icons import create_icon_canvas, draw_database_glyph
 from .labels import make_button, make_label
 
 
-def _total(values: list) -> int | None:
+def total(values: list) -> int | None:
     """Sum the known values; None if the server reported none of them.
 
     Author: Archer
@@ -76,19 +79,20 @@ class ConnectionBanner(ctk.CTkFrame):
 
 
 class StatCards(ctk.CTkFrame):
-    """Four totals across the cluster: databases, collections, documents,
-    storage size."""
+    """A row of equal-width cards: title, big value, small note.
 
-    TITLES = ("Databases", "Collections", "Documents", "Storage size")
+    Author: Archer (now generic: the page passes titles and values, so the
+    Dashboard and Collections pages share it)
+    """
 
-    def __init__(self, master) -> None:
+    def __init__(self, master, titles: tuple) -> None:
         """Author: Archer"""
         super().__init__(master, fg_color="transparent")
         self._cards = [self._build_card(index, title)
-                       for index, title in enumerate(self.TITLES)]
+                       for index, title in enumerate(titles)]
 
     def _build_card(self, column: int, title: str) -> tuple:
-        """One card: title, big value, small note. Returns (value, note).
+        """One card. Returns its (value label, note label).
 
         Author: Archer
         """
@@ -106,27 +110,50 @@ class StatCards(ctk.CTkFrame):
         note.pack(anchor="w", padx=14, pady=(8, 14))
         return value, note
 
-    def set_databases(self, databases: list) -> None:
-        """Recompute every card from a list of DatabaseStats.
+    def set_values(self, texts) -> None:
+        """Fill the cards in order from (value, note) pairs.
 
         Author: Archer
         """
-        system = sum(1 for db in databases if db.name in SYSTEM_DATABASES)
-        documents = _total([db.documents for db in databases])
-        data = _total([db.data_size for db in databases])
-        texts = (
-            (str(len(databases)),
-             f"{len(databases) - system} application · {system} system"),
-            (format_count(_total([db.collections for db in databases])),
-             "Across all databases"),
-            (format_compact_count(documents),
-             f"{format_count(documents)} total documents"),
-            (format_bytes(_total([db.storage_size for db in databases])),
-             f"{format_bytes(data)} logical data size"),
-        )
         for (value, note), (value_text, note_text) in zip(self._cards, texts):
             value.configure(text=value_text)
             note.configure(text=note_text)
+
+
+def database_card_texts(databases: list) -> tuple:
+    """Dashboard cards: databases, collections, documents, storage size.
+
+    Author: Archer
+    """
+    system = sum(1 for db in databases if db.name in SYSTEM_DATABASES)
+    documents = total([db.documents for db in databases])
+    data = total([db.data_size for db in databases])
+    return (
+        (str(len(databases)),
+         f"{len(databases) - system} application · {system} system"),
+        (format_count(total([db.collections for db in databases])),
+         "Across all databases"),
+        (format_compact_count(documents),
+         f"{format_count(documents)} total documents"),
+        (format_bytes(total([db.storage_size for db in databases])),
+         f"{format_bytes(data)} logical data size"),
+    )
+
+
+def collection_card_texts(database, collection_count: int) -> tuple:
+    """Collections page cards: documents, data size, storage size, indexes.
+
+    Author: Archer
+    """
+    return (
+        (format_count(database.documents),
+         f"Across {collection_count} collections"),
+        (format_bytes(database.data_size),
+         f"{format_bytes(database.average_document_size)} average document size"),
+        (format_bytes(database.storage_size), "Includes indexes"),
+        (format_count(database.indexes),
+         f"{format_bytes(database.index_size)} total index size"),
+    )
 
 
 class StatusBar(ctk.CTkFrame):

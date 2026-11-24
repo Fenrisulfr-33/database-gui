@@ -4,7 +4,8 @@ Author: Archer (bumped default window size for the restyled login view;
 added the brand mark as the window icon; save remembered clusters to the
 local JSON file after a successful login; swapped the database home screen
 for the new DashboardView; rename now uses the styled FormDialog pop-up;
-all native messagebox prompts replaced with in-app MessageDialog pop-ups)
+all native messagebox prompts replaced with in-app MessageDialog pop-ups;
+databases now open the styled CollectionsView)
 """
 
 from functools import partial
@@ -19,7 +20,7 @@ from .assets import BRAND_MARK, load_image
 from .views.connection_view import ConnectionView
 from .views.dashboard_actions import DashboardActions
 from .views.dashboard_view import DashboardView
-from .views.collection_view import CollectionView
+from .views.collections_view import CollectionsView
 from .views.document_view import DocumentActions, DocumentView
 from .widgets.form_dialog import FormDialog, FormField, FormSpec
 from .widgets.message_dialog import MessageSpec, show_dialog
@@ -112,38 +113,43 @@ class App(ctk.CTk):
             show_dialog(self, MessageSpec("Cluster not saved", str(error),
                                           "warning"))
             
+    def _make_actions(self) -> DashboardActions:
+        """Everything the cluster pages can ask for, bound to this connection.
+
+        Author: Archer
+        """
+        connection = self._connection
+        return DashboardActions(
+            load_databases=connection.list_database_stats,
+            list_database_names=connection.list_databases,
+            load_database_stats=connection.get_database_stats,
+            load_collection_stats=connection.list_collection_stats,
+            load_status=connection.get_cluster_status,
+            list_collections=connection.list_collections,
+            go_home=self._show_dashboard,
+            open_database=self._collections_view,
+            open_collection=self._documents_view,
+            disconnect=self._disconnect,
+            create_database=self._create_database,
+            rename_database=self._rename_database,
+            create_collection=connection.create_collection,
+            rename_collection=connection.rename_collection,
+        )
+
     def _show_dashboard(self) -> None:
         """Show the dashboard for the current connection.
 
         Author: Archer
         """
-        connection = self._connection
-        actions = DashboardActions(
-            load_databases=connection.list_database_stats,
-            load_status=connection.get_cluster_status,
-            list_collections=connection.list_collections,
-            open_database=self._collections_view,
-            open_collection=self._documents_view,
-            create_database=self._create_database,
-            rename_database=self._rename_database,
-            disconnect=self._disconnect,
-        )
-        self._show_view(DashboardView(self, self._login, actions))
-        
-    def _collections_view(
-        self, 
-        database,
-    ) -> None:
-        self._show_view(
-            CollectionView(
-            self, 
-            database, 
-            self._return_to_database_view,
-            self._list_collections,
-            self._create_collection,
-            self._documents_view
-            )
-        )
+        self._show_view(DashboardView(self, self._login, self._make_actions()))
+
+    def _collections_view(self, database: str) -> None:
+        """Show the Collections page for one database.
+
+        Author: Archer (styled CollectionsView replaces CollectionView)
+        """
+        self._show_view(CollectionsView(
+            self, self._login, (self._make_actions(), database)))
 
     def _documents_view(self, database: str, collection: str) -> None:
         """Open the screen for one collection."""
@@ -174,24 +180,6 @@ class App(ctk.CTk):
             self._connection = None
         self._login = None
         self._show_login()
-
-    def _list_collections(
-            self, database_name
-        ) -> list[str]:
-            return self._connection.list_collections(database_name)
-        
-    def _return_to_database_view(
-        self,
-    ) -> None:
-        self._show_dashboard()
-            
-    def _create_collection(
-        self, database_name: str, collection_name: str
-    ) -> list[str]:
-        if self._connection is None:
-            raise ValueError(
-                "Connect to a cluster before creating a database.")
-        return self._connection.create_collection(database_name,collection_name)
 
     def _rename_database(self, source_name: str) -> None:
         target_name = self._prompt_database_name(source_name)

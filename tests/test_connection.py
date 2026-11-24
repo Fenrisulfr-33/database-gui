@@ -457,7 +457,8 @@ def test_get_database_stats_reads_db_stats_and_adds_indexes() -> None:
 
     stats = service.get_database_stats("shop")
 
-    assert stats == connection.DatabaseStats("shop", 3, 10, 500, 1000)
+    assert stats == connection.DatabaseStats("shop", 3, 10, 500, 1000,
+                                             index_size=200)
 
 
 def test_get_database_stats_returns_blanks_when_command_fails() -> None:
@@ -499,3 +500,79 @@ def test_get_cluster_status_reports_ping_version_and_replica_set() -> None:
     assert status.host == "c0.example.net"
     assert status.ping_ms is not None
     assert (status.version, status.replica_set) == ("7.0.14", "rs0")
+
+
+# --- Collections page (Author: Archer) ---
+
+def test_count_fields_unions_top_level_keys() -> None:
+    # mongomock can't run $collStats, so test the field count on its own.
+    _service, client = _connected_service()
+    client["shop"]["orders"].insert_many([{"a": 1, "b": 2}, {"a": 3, "c": 4}])
+
+    assert connection._count_fields(client["shop"]["orders"]) == 4  # _id,a,b,c
+
+
+def test_get_collection_stats_keeps_blanks_when_coll_stats_fails() -> None:
+    from pymongo.errors import OperationFailure
+
+    class Collection:
+        def find(self, _filter, limit):
+            return [{"_id": 1, "x": 1}]
+
+        def aggregate(self, _pipeline):
+            raise OperationFailure("views have no storage stats")
+
+    service = connection.MongoConnection("mongodb://c0")
+    service._client = {"shop": {"v": Collection()}}
+
+    stats = service.get_collection_stats("shop", "v")
+
+    assert stats == connection.CollectionStats("v", fields=2)
+
+
+def test_get_collection_stats_reads_storage_stats() -> None:
+    class Collection:
+        def find(self, _filter, limit):
+            return []
+
+        def aggregate(self, _pipeline):
+            return iter([{"storageStats": {
+                "count": 5, "size": 500.0, "nindexes": 2,
+                "totalIndexSize": 64.0}}])
+
+    service = connection.MongoConnection("mongodb://c0")
+    service._client = {"shop": {"orders": Collection()}}
+
+    assert service.get_collection_stats("shop", "orders") == \
+        connection.CollectionStats("orders", 5, 500, 2, 64, 0)
+
+
+def test_rename_collection_renames_in_place() -> None:
+    service, client = _connected_service()
+    client["shop"]["orders"].insert_one({"a": 1})
+
+    service.rename_collection("shop", "orders", " sales ")
+
+    assert client["shop"].list_collection_names() == ["sales"]
+
+
+@pytest.mark.parametrize("name", ["", "bad$name", "system.users"])
+def test_rename_collection_rejects_invalid_names(name: str) -> None:
+    service, _client = _connected_service()
+
+    with pytest.raises(ValueError):
+        service.rename_collection("shop", "orders", name)
+
+
+def test_rename_collection_reports_taken_name() -> None:
+    from pymongo.errors import OperationFailure
+
+    class Collection:
+        def rename(self, _new):
+            raise OperationFailure("exists", code=connection.NAMESPACE_EXISTS)
+
+    service = connection.MongoConnection("mongodb://c0")
+    service._client = {"shop": {"orders": Collection()}}
+
+    with pytest.raises(ValueError, match="already exists"):
+        service.rename_collection("shop", "orders", "sales")

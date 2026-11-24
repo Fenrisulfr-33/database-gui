@@ -15,8 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org).
 - **Remember me** on the login screen now saves successful logins to `~/.db_gui/saved_clusters.json` (`utils/saved_clusters.py`), with an optional cluster name and a dropdown to pick a saved cluster. Passwords are stored in plain text for now.
 - `db/connection.py`: `list_database_stats()`, `get_database_stats()` and `get_cluster_status()`.
 - Tests: `test_dashboard_view.py`, `test_connection_view.py`, `test_saved_clusters.py`, `test_form_dialog.py`, plus new tests in `test_connection.py` and `test_formatters.py`.
+- **Collections page** (`gui/views/collections_view.py`), styled after `design/Collections.png`, replaces the old plain collections screen. It has stat cards, filter, Name A–Z/Z–A sort, a sampled Fields column, Create collection, and **Rename collection** in each row's `···` menu. The open database is highlighted green in the sidebar.
+- `gui/views/cluster_page.py`: shared frame (header, sidebar, status bar, background loading) for the Dashboard and Collections pages. `gui/widgets/stats_table.py` is the table both pages use.
+- `db/connection.py`: `list_collection_stats()`, `get_collection_stats()`, `rename_collection()`, and index/average-size fields on `DatabaseStats`.
+- Sidebar: a database's name opens its Collections page (the chevron just expands it), "Databases" goes back to the dashboard, and collections have a table icon.
+- UI icons from `design/` (copied to `src/db_gui/assets/` with snake_case names) replace text glyphs and canvas drawings: chevron-right / chevron-down (green when expanded) on Explorer databases and the table's open button, ellipsis for the `···` menu, refresh-cw on every Refresh button, search inside the filter boxes, sliders-horizontal on **All databases**, and table-2 for collections. `gui/assets.py` gained the icon names plus `set_icon()` and `make_icon_label()`.
+
+### Fixed
+- GUI tests no longer fail or skip at random on Windows: pytest now uses `--capture=sys` (set in `pyproject.toml`), because the default fd capture made Tk fail to start or load images with a bare `TclError`.
 
 ### Removed
+- `gui/views/collection_view.py` and `gui/widgets/database_table.py`. Replaced by the Collections page and `stats_table.py`.
 - `gui/views/database_view.py` and `tests/test_database_view.py`. The dashboard replaces that screen.
 
 ## 2026-11-17

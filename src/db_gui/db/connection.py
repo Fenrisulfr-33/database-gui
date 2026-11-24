@@ -11,10 +11,15 @@ from bson import BSON
 from bson.codec_options import CodecOptions
 from pymongo import IndexModel, MongoClient
 from pymongo.database import Database
-from pymongo.errors import BulkWriteError, DuplicateKeyError, PyMongoError
+from pymongo.errors import (BulkWriteError, DuplicateKeyError,
+                            OperationFailure, PyMongoError)
 
 # the document list is drawn in the GUI, so don't load a whole big collection
 DOCUMENT_LIST_LIMIT = 100
+# how many documents to look at when counting a collection's fields
+FIELD_SAMPLE_SIZE = 100
+# MongoDB's "target namespace already exists" error code
+NAMESPACE_EXISTS = 48
 
 
 @dataclass
@@ -51,6 +56,28 @@ class DatabaseStats:
     documents: int | None = None
     data_size: int | None = None
     storage_size: int | None = None
+    # Used by the Collections page stat cards (Author: Archer).
+    indexes: int | None = None
+    index_size: int | None = None
+    average_document_size: int | None = None
+
+
+@dataclass
+class CollectionStats:
+    """Numbers for one collection row on the Collections page.
+
+    Author: Archer
+
+    A value is None when the server would not report it (for example a
+    view has no storage stats).
+    """
+
+    name: str
+    documents: int | None = None
+    data_size: int | None = None
+    indexes: int | None = None
+    index_size: int | None = None
+    fields: int | None = None
 
 
 @dataclass
@@ -238,7 +265,59 @@ class MongoConnection:
         return DatabaseStats(
             database_name, _as_int(stats.get("collections")),
             _as_int(stats.get("objects")), _as_int(stats.get("dataSize")),
-            _as_int(storage))
+            _as_int(storage), _as_int(stats.get("indexes")),
+            _as_int(stats.get("indexSize")), _as_int(stats.get("avgObjSize")))
+
+    def list_collection_stats(self, database_name: str) -> list[CollectionStats]:
+        """Stats for every collection in a database, sorted by name.
+
+        Author: Archer
+        """
+        return [self.get_collection_stats(database_name, name)
+                for name in self.list_collections(database_name)]
+
+    def get_collection_stats(
+        self, database_name: str, collection_name: str
+    ) -> CollectionStats:
+        """Storage stats ($collStats) plus a sampled field count.
+
+        Author: Archer
+        """
+        collection = self._require_client()[database_name][collection_name]
+        stats = CollectionStats(collection_name,
+                                fields=_count_fields(collection))
+        try:
+            result = next(collection.aggregate(
+                [{"$collStats": {"storageStats": {}}}]), {})
+        except PyMongoError:
+            return stats  # e.g. a view, or no permission
+        storage = result.get("storageStats", {})
+        stats.documents = _as_int(storage.get("count"))
+        stats.data_size = _as_int(storage.get("size"))
+        stats.indexes = _as_int(storage.get("nindexes"))
+        stats.index_size = _as_int(storage.get("totalIndexSize"))
+        return stats
+
+    def rename_collection(
+        self, database_name: str, source_name: str, target_name: str
+    ) -> None:
+        """Rename a collection in place (MongoDB's renameCollection).
+
+        Raises ValueError with a readable message for bad or taken names.
+
+        Author: Archer
+        """
+        target_name = target_name.strip()
+        _validate_collection_name(target_name)
+        collection = self._require_client()[database_name][source_name]
+        try:
+            collection.rename(target_name)
+        except OperationFailure as error:
+            if error.code == NAMESPACE_EXISTS:
+                raise ValueError(
+                    f"A collection named '{target_name}' already exists."
+                ) from error
+            raise
 
     def get_cluster_status(self) -> ClusterStatus:
         """Ping the cluster and read its version and replica set name.
@@ -807,3 +886,30 @@ def _host_from_uri(uri: str) -> str:
     host = uri.split("://", 1)[-1]
     host = host.rsplit("@", 1)[-1]  # drop any user:password@
     return host.split("/", 1)[0].split("?", 1)[0]
+
+
+def _count_fields(collection) -> int | None:
+    """Distinct top-level field names in a sample of documents.
+
+    Author: Archer
+    """
+    try:
+        fields = set()
+        for document in collection.find({}, limit=FIELD_SAMPLE_SIZE):
+            fields.update(document.keys())
+        return len(fields)
+    except PyMongoError:
+        return None
+
+
+def _validate_collection_name(name: str) -> None:
+    """Raise ValueError if MongoDB wouldn't accept this collection name.
+
+    Author: Archer
+    """
+    if not name:
+        raise ValueError("A collection name is required.")
+    if "$" in name or "\0" in name:
+        raise ValueError("Collection names can't contain '$' or null.")
+    if name.startswith("system."):
+        raise ValueError("Collection names can't start with 'system.'.")

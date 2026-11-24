@@ -121,6 +121,24 @@ flowchart TD
 ```
 
 
+---
+
+## Collections page
+
+Styled after `design/Collections.png`. It uses the same frame as the dashboard (header, sidebar, status bar) and opens when you click a database: a table row, its `›`, or the database's **name** in the sidebar. (The sidebar chevron only shows/hides that database's collections.)
+
+- The open database is **highlighted green and expanded** in the sidebar, with a table icon next to each collection.
+- Breadcrumb: `<cluster> / Databases / <database>`. The first two, and the sidebar's **Databases** item, go back to the dashboard.
+- **Create collection** (green button) opens the same style of pop-up as Create database.
+- Tabs: **Collections N** (active) and **Statistics** (drawn but disabled for now).
+- Stat cards: **Documents** (across N collections), **Data size** (average document size), **Storage size** (includes indexes), **Indexes** (total index size).
+- Toolbar: filter box (same rules as the dashboard), **Name: A–Z / Z–A** sort toggle, **Refresh**.
+- Table: collection name, documents, data size, indexes, index size, and **fields**. Fields is the number of distinct top-level field names in a sample of up to 100 documents, so it's an estimate.
+- Clicking a collection row (or `›`) opens the existing documents screen. Clicking a collection in the sidebar does the same.
+- Each row's `···` opens the feature menu with **Rename** (collection). The pop-up has the current name filled in. Renaming happens in place (MongoDB `renameCollection`, no archive needed). Taken or invalid names show an error inside the pop-up.
+- There's no "More" button (removed from the design). Per-collection features live in the row `···` menu.
+- Like the dashboard, everything loads on a background thread.
+
 ### List of features
 
 Currently we only have `rename` feature

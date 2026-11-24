@@ -1,6 +1,6 @@
 """Small vector icons drawn on a Tk canvas (no image files needed).
 
-Author: Archer (added the database, pencil, and close glyphs for the dashboard)
+Author: Archer (added the database, collection, pencil, and close glyphs)
 
 Each draw_* function clears the canvas and redraws, so a toggle (like the
 password eye) can simply call it again with different arguments.
@@ -93,3 +93,17 @@ def draw_close_glyph(canvas: tk.Canvas, color: str) -> None:
     low, high = s * 0.2, s * 0.8
     canvas.create_line(low, low, high, high, fill=color, width=1.8)
     canvas.create_line(low, high, high, low, fill=color, width=1.8)
+
+
+def draw_collection_glyph(canvas: tk.Canvas, color: str) -> None:
+    """Draw a small table (box with a header row and a column line).
+
+    Author: Archer
+    """
+    canvas.delete("all")
+    s = int(canvas.cget("width"))
+    low, high = s * 0.15, s * 0.85
+    canvas.create_rectangle(low, low, high, high, outline=color, width=1.4)
+    canvas.create_line(low, s * 0.38, high, s * 0.38, fill=color, width=1.4)
+    canvas.create_line(s * 0.40, s * 0.38, s * 0.40, high, fill=color,
+                       width=1.4)
