@@ -24,6 +24,7 @@ from .views.collections_view import CollectionsView
 from .views.document_view import DocumentActions, DocumentView
 from .widgets.form_dialog import FormDialog, FormField, FormSpec
 from .widgets.message_dialog import MessageSpec, show_dialog
+from .widgets.schema_tab import SchemaActions
 
 
 class App(ctk.CTk):
@@ -152,7 +153,10 @@ class App(ctk.CTk):
             self, self._login, (self._make_actions(), database)))
 
     def _documents_view(self, database: str, collection: str) -> None:
-        """Open the screen for one collection."""
+        """Open the screen for one collection.
+
+        Author: Archer (added the Schema tab's actions)
+        """
         # partial fills in the database and collection names for the view
         actions = DocumentActions(
             back=lambda: self._collections_view(database),
@@ -162,9 +166,27 @@ class App(ctk.CTk):
                 self._connection.add_document, database, collection),
             add_documents=partial(
                 self._connection.add_documents, database, collection),
+            schema=self._schema_actions(database, collection),
         )
         self._show_view(
             DocumentView(self, f"{database}.{collection}", actions))
+
+    def _schema_actions(self, database: str, collection: str) -> SchemaActions:
+        """The db/ schema functions, set up for one collection.
+
+        Author: Archer
+        """
+        connection = self._connection
+        return SchemaActions(
+            get_schema=partial(
+                connection.get_collection_schema, database, collection),
+            save_schema=partial(
+                connection.set_collection_schema, database, collection),
+            remove_schema=partial(
+                connection.remove_collection_schema, database, collection),
+            count_mismatches=partial(
+                connection.count_schema_mismatches, database, collection),
+        )
 
     def _create_database(
         self, database_name: str, collection_name: str

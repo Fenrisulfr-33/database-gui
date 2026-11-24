@@ -183,6 +183,9 @@ Clarifications:
 - If the raw JSON uses something the simplified view can't show (nested objects, regex patterns, allowed-value lists, etc.), saving is **rejected** with an "unsupported in this version" error.
 - Before saving (adding a schema to a collection with data, or editing an existing one), the app checks existing documents and warns: "N documents don't match this schema. Save anyway?" The user can cancel.
 - Invalid JSON shows an error inside the tab and nothing is saved.
+- Switching between Simplified and Raw JSON converts what's on screen. If it can't (bad JSON, unsupported rule), the error shows and the view doesn't switch.
+- A schema with no fields can't be saved (it would reject every document). Use **Remove schema** instead.
+- If the saved schema is unsupported (e.g. someone set it outside this app), the tab opens in Raw JSON with the error.
 
 ### Insert / edit form
 

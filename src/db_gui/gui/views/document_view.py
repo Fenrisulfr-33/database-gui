@@ -1,4 +1,7 @@
-"""Screen for one collection: shows its documents and adds new ones."""
+"""Screen for one collection: shows its documents and adds new ones.
+
+Author: Archer (Documents / Schema tabs)
+"""
 
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -12,6 +15,7 @@ from ...utils.files import read_text_file
 from ...utils.formatters import format_document_preview
 from ...utils.validators import parse_document_json, parse_documents_json
 from ..widgets.dialogs import JsonDocumentDialog
+from ..widgets.schema_tab import SchemaActions, SchemaTab
 
 
 @dataclass
@@ -22,6 +26,8 @@ class DocumentActions:
     list_documents: Callable[[], list[dict]]
     add_document: Callable[[dict], list[dict]]
     add_documents: Callable[[list[dict]], ImportResult]
+    # Author: Archer - None hides the Schema tab
+    schema: SchemaActions | None = None
 
 
 class DocumentView(ctk.CTkFrame):
@@ -37,36 +43,54 @@ class DocumentView(ctk.CTkFrame):
         self._load_documents()
 
     def _build_view(self) -> None:
-        """Title, status line, document list and buttons."""
+        """Title, Back, and the Documents / Schema tabs.
+
+        Author: Archer (moved the document list into a Documents tab)
+        """
         self.grid_columnconfigure(0, weight=1)
-        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(1, weight=1)
         ctk.CTkLabel(
             self, text=self._title, font=ctk.CTkFont(size=24, weight="bold"),
         ).grid(row=0, column=0, padx=30, pady=(30, 8), sticky="w")
-        self._status_label = ctk.CTkLabel(self, text="")
-        self._status_label.grid(
-            row=1, column=0, padx=30, pady=(0, 16), sticky="w")
-        self._document_list = ctk.CTkScrollableFrame(self, height=300)
-        self._document_list.grid(
-            row=2, column=0, columnspan=2, padx=30, pady=10, sticky="nsew")
-        self._build_buttons()
+        ctk.CTkButton(
+            self, text="Back", command=self._actions.back, width=120
+        ).grid(row=0, column=1, padx=30, pady=(30, 8), sticky="e")
+        self.tabs = ctk.CTkTabview(self)
+        self.tabs.grid(row=1, column=0, columnspan=2, padx=30, pady=(0, 20),
+                       sticky="nsew")
+        self._build_documents_tab(self.tabs.add("Documents"))
+        if self._actions.schema is not None:
+            self.schema_tab = SchemaTab(self.tabs.add("Schema"),
+                                        self._actions.schema)
+            self.schema_tab.pack(fill="both", expand=True)
 
-    def _build_buttons(self) -> None:
-        """Add document and Import on the left, Back on the right."""
-        add_buttons = ctk.CTkFrame(self, fg_color="transparent")
-        add_buttons.grid(row=3, column=0, padx=30, pady=20, sticky="w")
+    def _build_documents_tab(self, tab: ctk.CTkFrame) -> None:
+        """Status line, document list and buttons.
+
+        Author: Archer (now inside the Documents tab)
+        """
+        tab.grid_columnconfigure(0, weight=1)
+        tab.grid_rowconfigure(1, weight=1)
+        self._status_label = ctk.CTkLabel(tab, text="")
+        self._status_label.grid(row=0, column=0, padx=10, pady=(4, 8),
+                                sticky="w")
+        self._document_list = ctk.CTkScrollableFrame(tab, height=300)
+        self._document_list.grid(row=1, column=0, padx=10, pady=6,
+                                 sticky="nsew")
+        self._build_buttons(tab)
+
+    def _build_buttons(self, tab: ctk.CTkFrame) -> None:
+        """Add document and Import JSON file, then the message line."""
+        add_buttons = ctk.CTkFrame(tab, fg_color="transparent")
+        add_buttons.grid(row=2, column=0, padx=10, pady=10, sticky="w")
         ctk.CTkButton(
             add_buttons, text="Add document", command=self._prompt_add_document
         ).pack(side="left", padx=(0, 10))
         ctk.CTkButton(
             add_buttons, text="Import JSON file", command=self._import_file
         ).pack(side="left")
-        ctk.CTkButton(
-            self, text="Back", command=self._actions.back, width=120
-        ).grid(row=3, column=1, padx=30, pady=20, sticky="e")
-        self._message_label = ctk.CTkLabel(self, text="")
-        self._message_label.grid(
-            row=4, column=0, columnspan=2, padx=30, sticky="w")
+        self._message_label = ctk.CTkLabel(tab, text="")
+        self._message_label.grid(row=3, column=0, padx=10, sticky="w")
 
     def _load_documents(self) -> None:
         """Get the documents when the screen opens."""
