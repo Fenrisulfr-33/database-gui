@@ -576,3 +576,174 @@ def test_rename_collection_reports_taken_name() -> None:
 
     with pytest.raises(ValueError, match="already exists"):
         service.rename_collection("shop", "orders", "sales")
+
+
+# --- Collection schemas (Author: Archer) ---
+# mongomock can't run collMod or $jsonSchema, so these use small fakes that
+# record what MongoConnection sends to MongoDB.
+
+STRICT_SCHEMA = {"bsonType": "object", "additionalProperties": False,
+                 "properties": {"_id": {}, "name": {"bsonType": "string"}},
+                 "required": ["name"]}
+
+
+class SchemaCollection:
+    """Record the queries sent to one collection."""
+
+    def __init__(self, found: list[dict]) -> None:
+        self.found = found
+        self.queries: list[dict] = []
+
+    def count_documents(self, query: dict) -> int:
+        self.queries.append(query)
+        return len(self.found)
+
+    def find(self, query: dict, projection: dict) -> list[dict]:
+        self.queries.append(query)
+        return self.found
+
+
+class SchemaDatabase:
+    """Fake database whose collection options hold `validator`."""
+
+    def __init__(self, validator=None, found=None, exists=True) -> None:
+        options = {} if validator is None else {"validator": validator}
+        self.infos = [{"name": "people", "options": options}] if exists else []
+        self.commands: list[tuple] = []
+        self.collection = SchemaCollection(found or [])
+
+    def list_collections(self, filter: dict) -> list[dict]:
+        assert filter == {"name": "people"}
+        return self.infos
+
+    def command(self, *args, **kwargs) -> dict:
+        self.commands.append((args, kwargs))
+        return {"ok": 1}
+
+    def __getitem__(self, _name: str) -> SchemaCollection:
+        return self.collection
+
+
+def _schema_service(database: SchemaDatabase) -> connection.MongoConnection:
+    service = connection.MongoConnection("mongodb://c0")
+    service._client = {"shop": database}
+    return service
+
+
+def test_get_collection_schema_returns_inner_json_schema() -> None:
+    service = _schema_service(SchemaDatabase({"$jsonSchema": STRICT_SCHEMA}))
+
+    assert service.get_collection_schema("shop", "people") == STRICT_SCHEMA
+
+
+def test_get_collection_schema_returns_none_without_validator() -> None:
+    service = _schema_service(SchemaDatabase())
+
+    assert service.get_collection_schema("shop", "people") is None
+
+
+def test_get_collection_schema_rejects_query_validators() -> None:
+    validator = {"$jsonSchema": STRICT_SCHEMA, "age": {"$gt": 0}}
+    service = _schema_service(SchemaDatabase(validator))
+
+    with pytest.raises(connection.UnsupportedSchemaError):
+        service.get_collection_schema("shop", "people")
+
+
+def test_get_collection_schema_reports_missing_collection() -> None:
+    service = _schema_service(SchemaDatabase(exists=False))
+
+    with pytest.raises(ValueError, match="doesn't exist"):
+        service.get_collection_schema("shop", "people")
+
+
+def test_set_collection_schema_saves_strict_validator() -> None:
+    database = SchemaDatabase()
+
+    _schema_service(database).set_collection_schema(
+        "shop", "people", STRICT_SCHEMA)
+
+    assert database.commands == [(
+        ("collMod", "people"),
+        {"validator": {"$jsonSchema": STRICT_SCHEMA},
+         "validationLevel": "strict", "validationAction": "error"},
+    )]
+
+
+def test_set_collection_schema_rejects_unsupported_before_saving() -> None:
+    database = SchemaDatabase()
+    schema = dict(STRICT_SCHEMA, title="extra")
+
+    with pytest.raises(connection.UnsupportedSchemaError):
+        _schema_service(database).set_collection_schema("shop", "people", schema)
+    assert database.commands == []
+
+
+def test_set_collection_schema_reports_server_rejection() -> None:
+    from pymongo.errors import OperationFailure
+
+    database = SchemaDatabase()
+
+    def refuse(*_args, **_kwargs):
+        raise OperationFailure("bad", details={"errmsg": "not allowed"})
+
+    database.command = refuse
+
+    with pytest.raises(ValueError, match="not allowed"):
+        _schema_service(database).set_collection_schema(
+            "shop", "people", STRICT_SCHEMA)
+
+
+def test_remove_collection_schema_clears_validator() -> None:
+    database = SchemaDatabase({"$jsonSchema": STRICT_SCHEMA})
+
+    _schema_service(database).remove_collection_schema("shop", "people")
+
+    assert database.commands == [(
+        ("collMod", "people"), {"validator": {}, "validationLevel": "off"})]
+
+
+def test_count_schema_mismatches_counts_documents_failing_schema() -> None:
+    database = SchemaDatabase(found=[{"_id": 1}, {"_id": 2}])
+
+    count = _schema_service(database).count_schema_mismatches(
+        "shop", "people", STRICT_SCHEMA)
+
+    assert count == 2
+    assert database.collection.queries == [
+        {"$nor": [{"$jsonSchema": STRICT_SCHEMA}]}]
+
+
+def test_find_schema_mismatches_checks_only_given_ids() -> None:
+    database = SchemaDatabase({"$jsonSchema": STRICT_SCHEMA},
+                              found=[{"_id": 2}])
+
+    broken = _schema_service(database).find_schema_mismatches(
+        "shop", "people", [1, 2])
+
+    assert broken == {2}
+    assert database.collection.queries == [
+        {"_id": {"$in": [1, 2]}, "$nor": [{"$jsonSchema": STRICT_SCHEMA}]}]
+
+
+def test_find_schema_mismatches_is_empty_without_schema() -> None:
+    database = SchemaDatabase(found=[{"_id": 2}])
+
+    assert _schema_service(database).find_schema_mismatches(
+        "shop", "people", [1, 2]) == set()
+    assert database.collection.queries == []
+
+
+def test_add_document_reports_schema_rejection() -> None:
+    from pymongo.errors import WriteError
+
+    class Collection:
+        def insert_one(self, _document):
+            raise WriteError("failed",
+                             code=connection.DOCUMENT_VALIDATION_FAILURE)
+
+    service = connection.MongoConnection("mongodb://c0")
+    service._client = {"shop": {"people": Collection()}}
+
+    with pytest.raises(ValueError, match="doesn't match"):
+        service.add_document("shop", "people", {"name": 5})

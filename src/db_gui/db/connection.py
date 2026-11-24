@@ -12,7 +12,9 @@ from bson.codec_options import CodecOptions
 from pymongo import IndexModel, MongoClient
 from pymongo.database import Database
 from pymongo.errors import (BulkWriteError, DuplicateKeyError,
-                            OperationFailure, PyMongoError)
+                            OperationFailure, PyMongoError, WriteError)
+
+from db_gui.db.schema import UnsupportedSchemaError, parse_schema
 
 # the document list is drawn in the GUI, so don't load a whole big collection
 DOCUMENT_LIST_LIMIT = 100
@@ -20,6 +22,8 @@ DOCUMENT_LIST_LIMIT = 100
 FIELD_SAMPLE_SIZE = 100
 # MongoDB's "target namespace already exists" error code
 NAMESPACE_EXISTS = 48
+# MongoDB's "document doesn't match the collection's validator" error code
+DOCUMENT_VALIDATION_FAILURE = 121
 
 
 @dataclass
@@ -190,6 +194,13 @@ class MongoConnection:
         except DuplicateKeyError as error:
             raise ValueError(
                 "A document with that _id already exists.") from error
+        except WriteError as error:
+            # Author: Archer - readable error when the schema rejects it
+            if error.code == DOCUMENT_VALIDATION_FAILURE:
+                raise ValueError(
+                    "This document doesn't match the collection's schema."
+                ) from error
+            raise
         return self.list_documents(database_name, collection_name)
 
     def add_documents(
@@ -318,6 +329,97 @@ class MongoConnection:
                     f"A collection named '{target_name}' already exists."
                 ) from error
             raise
+
+    def get_collection_schema(
+        self, database_name: str, collection_name: str
+    ) -> dict | None:
+        """Return the collection's $jsonSchema, or None if it has no schema.
+
+        The schema is stored in MongoDB as the collection's validator:
+        {"$jsonSchema": {...}}. Only the inner dict is returned.
+        Raises UnsupportedSchemaError if the validator also uses plain query
+        rules, which this app can't show.
+
+        Author: Archer
+        """
+        database = self._require_client()[database_name]
+        infos = list(database.list_collections(filter={"name": collection_name}))
+        if not infos:
+            raise ValueError(f"Collection '{collection_name}' doesn't exist.")
+        validator = infos[0].get("options", {}).get("validator")
+        if not validator:
+            return None
+        if set(validator) != {"$jsonSchema"}:
+            raise UnsupportedSchemaError(
+                "This collection's validator uses rules other than "
+                "$jsonSchema, which this version can't show.")
+        return validator["$jsonSchema"]
+
+    def set_collection_schema(
+        self, database_name: str, collection_name: str, schema: dict
+    ) -> None:
+        """Save a strict schema as the collection's validator (collMod).
+
+        The schema is checked with parse_schema first, so anything the
+        simplified view can't show is rejected before it reaches MongoDB.
+        Existing documents are kept even if they don't match; use
+        count_schema_mismatches first to warn the user.
+
+        Author: Archer
+        """
+        parse_schema(schema)
+        database = self._require_client()[database_name]
+        try:
+            database.command(
+                "collMod", collection_name,
+                validator={"$jsonSchema": schema},
+                validationLevel="strict", validationAction="error")
+        except OperationFailure as error:
+            raise ValueError(
+                f"MongoDB rejected the schema: {error.details.get('errmsg', error)}"
+            ) from error
+
+    def remove_collection_schema(
+        self, database_name: str, collection_name: str
+    ) -> None:
+        """Remove the schema so the collection is free-form again.
+
+        Author: Archer
+        """
+        database = self._require_client()[database_name]
+        database.command(
+            "collMod", collection_name, validator={}, validationLevel="off")
+
+    def count_schema_mismatches(
+        self, database_name: str, collection_name: str, schema: dict
+    ) -> int:
+        """Count documents that would break `schema` (for the save warning).
+
+        `$nor` flips the match, so MongoDB itself counts the documents that
+        do NOT pass the schema.
+
+        Author: Archer
+        """
+        collection = self._require_client()[database_name][collection_name]
+        return collection.count_documents({"$nor": [{"$jsonSchema": schema}]})
+
+    def find_schema_mismatches(
+        self, database_name: str, collection_name: str, document_ids: list
+    ) -> set:
+        """Return which of `document_ids` break the collection's current schema.
+
+        Takes the ids the documents page is showing, so only those are
+        checked. Returns an empty set when the collection has no schema.
+
+        Author: Archer
+        """
+        schema = self.get_collection_schema(database_name, collection_name)
+        if schema is None or not document_ids:
+            return set()
+        collection = self._require_client()[database_name][collection_name]
+        query = {"_id": {"$in": list(document_ids)},
+                 "$nor": [{"$jsonSchema": schema}]}
+        return {document["_id"] for document in collection.find(query, {"_id": 1})}
 
     def get_cluster_status(self) -> ClusterStatus:
         """Ping the cluster and read its version and replica set name.
