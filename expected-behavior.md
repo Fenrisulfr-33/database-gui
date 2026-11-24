@@ -76,7 +76,7 @@ The dashboard shows the all the clusters contents.
 2. A list of databases that shows database names with stats of their `collections`, `documents`, `data_size`, `storage_size`, and `...`
 3. The `...` allows a list of features to pop up, and a close button.
 4. A filter bare that lets you type in the name of a database to find faster, filtering should hide the other databases that don't match
-5. A header, THIS CURRENTLY SHOULDN"T WORK, so just gray out the functionality
+5. A header, CURRENTLY DISABLED
 
 Clarifications:
 
@@ -147,6 +147,82 @@ The `···` menu is styled after `design/Database features.png`. It's a small c
 
 ### Header
 
-The link in the header to `Docs` should take you to this link, `https://www.mongodb.com/docs/?utm_source=google&utm_campaign=search_gs_pl_evergreen_atlas_general_retarget-brand-ftusers_gic-null_ww-multi_ps-all_desktop_eng_lead&utm_term=mongodb&utm_medium=cpc_paid_search&utm_ad=p&utm_ad_campaign_id=23238673915&adgroup=199318467358&cq_cmp=23238673915&gad_source=1&gad_campaignid=23238673915&gbraid=0AAAAADQ1400Y6wVQLMIoej6GEF8rkLIx_&gclid=CjwKCAiA5Y_YBhBbEiwAK5Dl7QBD5QBGpShfT1RVs2IriMygvYiBvWGLlxiqFLKICbG0VCETRqgCmRoCu00QAvD_BwE`
-
 > Implemented with the clean link `https://www.mongodb.com/docs/`. The link above carries Google ad-tracking parameters (`gclid`, `utm_*`, …), which shouldn't be shipped. To change it, edit `DOCS_URL` in `src/db_gui/gui/widgets/dashboard_header.py`.
+
+## Documents Page
+
+The way this page is currently done is you can make raw json or upload a json document, however this app is intended to be easier to use from a consumer standpoint.
+
+The goal of this page is to let a collection have a **schema** (a layout of its fields and their types). Once a schema exists, **Add** opens a form built from it, so the user only fills in values instead of writing JSON. Collections without a schema keep the current raw JSON / upload behavior.
+
+### Schema
+
+A schema is stored in MongoDB itself as the collection's `$jsonSchema` validator, so everyone connected to the cluster sees the same one. Schemas are **strict**: a document that doesn't match is rejected, and extra fields are not allowed. To allow more or restrict more, the user edits the schema.
+
+- A schema is **optional**. It can be added when a collection is created or at any time later. A **Remove schema** option turns the collection back into a free-form one.
+- Each field has a **name**, a **type**, and a **Required** checkbox.
+- Types: `string`, `int`, `long`, `double`, `decimal`, `bool`, `date`, `ObjectId`, and **array of** any one of those.
+- Optional (not required) fields may be left out or set to `null`. Required fields must always have a value of the declared type.
+- **Min / max** (optional, not required to set):
+  - `string`: min/max length.
+  - `int`, `long`, `double`, `decimal`: min/max value.
+  - arrays: min/max number of items.
+- Arrays hold **one strict type**. Mixed arrays (e.g. strings and ints together) are not allowed. An empty array is allowed for now.
+- `_id` is allowed by every schema automatically.
+- Nested objects are **deferred** (later version).
+
+### Schema tab
+
+Each collection gets a **Schema** tab with two views the user can switch between:
+
+1. **Simplified**: a table of fields (name, type, required, min/max) where rows can be added, edited, and removed.
+2. **Raw JSON**: the actual `$jsonSchema`, **editable**. Edits made here show up in the simplified view and the other way around.
+
+Clarifications:
+
+- If the raw JSON uses something the simplified view can't show (nested objects, regex patterns, allowed-value lists, etc.), saving is **rejected** with an "unsupported in this version" error.
+- Before saving (adding a schema to a collection with data, or editing an existing one), the app checks existing documents and warns: "N documents don't match this schema. Save anyway?" The user can cancel.
+- Invalid JSON shows an error inside the tab and nothing is saved.
+
+### Insert / edit form
+
+When a collection has a schema, **Add** and **Edit** both open a form generated from it instead of the JSON box.
+
+- One labeled input per field, matched to its type: text box for strings and numbers, checkbox for `bool`, text box for `date` in `YYYY-MM-DD` format (e.g. `2026-11-23`), and a list editor for arrays (add/remove items of the declared type).
+- Required fields are marked. Optional fields can be left empty, which saves as `null`.
+- `_id` is shown at the top of the form:
+  - On **insert** it's optional. If left empty, MongoDB generates one.
+  - If the `_id` is already used in the collection, show an error ("A document with this _id already exists.") and keep the form open.
+  - On **edit** it's shown but read-only, since MongoDB doesn't allow changing an existing `_id`.
+- Values are converted to their declared type before saving. Anything invalid (wrong type, out of min/max range, missing required value) is **highlighted red** and the form refuses to save until it's fixed.
+
+### Documents that break the schema
+
+A schema can be added to a collection that already has documents that don't match (after the warning above). MongoDB keeps those documents, but rejects any update to them until they match.
+
+- The documents page marks these documents with an **error indicator** ("Doesn't match schema"). They are found with a `$nor: [{ $jsonSchema: ... }]` query, so MongoDB does the checking.
+- Opening one in the edit form highlights the bad fields in red, and saving is refused until they're fixed.
+
+### Schema flow
+
+```mermaid
+flowchart TD
+    coll(["Collection"]) --> has_schema{"Has a schema?"}
+    has_schema -- No --> json["Add / Edit uses<br/>raw JSON or upload"]
+    has_schema -- Yes --> form["Add / Edit uses<br/>form built from schema"]
+    form --> fill["Fill in values"] --> check{"All values valid?"}
+    check -- No --> red["Highlight bad fields red,<br/>refuse to save"] --> fill
+    check -- Yes --> dup{"_id already used?"}
+    dup -- Yes --> dup_err["Show duplicate _id error"] --> fill
+    dup -- No --> saved(["Document saved"])
+    coll --> tab["Schema tab"]
+    tab --> edit["Edit in simplified<br/>or raw JSON view"] --> supported{"Supported in<br/>simplified view?"}
+    supported -- No --> unsupported["Reject: unsupported<br/>in this version"] --> edit
+    supported -- Yes --> broken{"Existing documents<br/>break it?"}
+    broken -- Yes --> warn{"Warn: N documents<br/>don't match. Save anyway?"}
+    warn -- No --> edit
+    warn -- Yes --> apply
+    broken -- No --> apply["Save as collection<br/>validator"]
+    apply --> mark["Mark non-matching<br/>documents with error"]
+    tab -- "Remove schema" --> free["Collection becomes<br/>free-form again"]
+```
