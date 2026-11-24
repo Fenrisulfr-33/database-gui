@@ -20,6 +20,7 @@ from .assets import BRAND_MARK, load_image
 from .views.connection_view import ConnectionView
 from .views.dashboard_actions import DashboardActions
 from .views.dashboard_view import DashboardView
+from .views.add_document_view import AddDocumentPage, AddDocumentView
 from .views.collections_view import CollectionsView
 from .views.document_view import DocumentActions, DocumentView
 from .widgets.form_dialog import FormDialog, FormField, FormSpec
@@ -162,14 +163,29 @@ class App(ctk.CTk):
             back=lambda: self._collections_view(database),
             list_documents=partial(
                 self._connection.list_documents, database, collection),
-            add_document=partial(
-                self._connection.add_document, database, collection),
+            open_add_document=partial(
+                self._add_document_view, database, collection),
             add_documents=partial(
                 self._connection.add_documents, database, collection),
             schema=self._schema_actions(database, collection),
         )
         self._show_view(
             DocumentView(self, f"{database}.{collection}", actions))
+
+    def _add_document_view(self, database: str, collection: str) -> None:
+        """Show the Add document page for one collection.
+
+        Author: Archer (replaces the Add document pop-up)
+        """
+        page = AddDocumentPage(
+            database, collection,
+            add_document=partial(
+                self._connection.add_document, database, collection),
+            get_schema=partial(
+                self._connection.get_collection_schema, database, collection),
+        )
+        self._show_view(AddDocumentView(
+            self, self._login, (self._make_actions(), page)))
 
     def _schema_actions(self, database: str, collection: str) -> SchemaActions:
         """The db/ schema functions, set up for one collection.

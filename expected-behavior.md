@@ -187,6 +187,16 @@ Clarifications:
 - A schema with no fields can't be saved (it would reject every document). Use **Remove schema** instead.
 - If the saved schema is unsupported (e.g. someone set it outside this app), the tab opens in Raw JSON with the error.
 
+### Add document page
+
+Styled after `design/Add document.png`. **Add document** on the documents screen opens this page (it replaced the old pop-up). Until the schema form (below) is built, every collection uses this JSON editor.
+
+- Same frame as the dashboard. Breadcrumb: `<cluster> / <database> / <collection> / Add document`, each part a link. **Back to documents** and **Cancel** return to the documents screen.
+- Banner: "You are connected to <cluster name>. This document will be inserted when you select Insert document." It has no READ / WRITE tag, because the app doesn't check user roles.
+- JSON editor: line numbers, syntax colors, current-line highlight, **Format JSON** (re-indents, leaves Extended JSON as typed), and a footer with "Valid document" or the JSON error, plus Ln/Col, UTF-8, and size. Tab inserts two spaces.
+- **Insert document** is disabled while the JSON is invalid. Ctrl+Enter also inserts. On success the page goes back to the documents screen. Errors (duplicate `_id`, schema rejection, permissions) show in the footer and the page stays open.
+- Document details: destination (database + collection), Document ID and BSON data types notes, a **Schema** line ("Enforced" or "None"), and an Extended JSON reference link. The design's "Validate before insert" checkbox was replaced by the Schema line, because schemas are strict and validation can't be switched off.
+
 ### Insert / edit form
 
 When a collection has a schema, **Add** and **Edit** both open a form generated from it instead of the JSON box.

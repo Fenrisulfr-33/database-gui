@@ -19,11 +19,9 @@ def root():
     window.destroy()
 
 
-def make_view(root, stored: list[dict]):
+def make_view(root, stored: list[dict], opened: list | None = None):
     """Make a DocumentView that uses a plain list instead of MongoDB."""
-    def add_document(document: dict) -> list[dict]:
-        stored.append(document)
-        return list(stored)
+    opened = opened if opened is not None else []
 
     def add_documents(documents: list[dict]) -> ImportResult:
         stored.extend(documents)
@@ -32,10 +30,16 @@ def make_view(root, stored: list[dict]):
     actions = document_view.DocumentActions(
         back=lambda: None,
         list_documents=lambda: list(stored),
-        add_document=add_document,
+        open_add_document=lambda: opened.append("add"),
         add_documents=add_documents,
     )
     return document_view.DocumentView(root, "shop.items", actions)
+
+
+def _all_widgets(widget):
+    for child in widget.winfo_children():
+        yield child
+        yield from _all_widgets(child)
 
 
 def test_document_view_shows_existing_documents(root) -> None:
@@ -44,25 +48,17 @@ def test_document_view_shows_existing_documents(root) -> None:
     assert view._status_label.cget("text") == "1 document"
 
 
-def test_submit_document_adds_and_refreshes_list(root) -> None:
-    stored: list[dict] = []
-    view = make_view(root, stored)
+def test_add_document_button_opens_add_document_page(root) -> None:
+    """Author: Archer (the pop-up became the Add document page)"""
+    opened: list = []
+    view = make_view(root, [], opened)
+    button = next(widget for widget in _all_widgets(view)
+                  if isinstance(widget, document_view.ctk.CTkButton)
+                  and widget.cget("text") == "Add document")
 
-    error = view._submit_document('{"name": "pen"}')
+    button.invoke()
 
-    assert error is None
-    assert stored == [{"name": "pen"}]
-    assert view._status_label.cget("text") == "1 document"
-
-
-def test_submit_document_returns_error_for_bad_json(root) -> None:
-    stored: list[dict] = []
-    view = make_view(root, stored)
-
-    error = view._submit_document("{not json")
-
-    assert "Invalid JSON" in error
-    assert stored == []
+    assert opened == ["add"]
 
 
 # import file

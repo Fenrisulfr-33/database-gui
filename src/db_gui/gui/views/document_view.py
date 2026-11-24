@@ -13,8 +13,7 @@ import customtkinter as ctk
 from ...db.connection import DOCUMENT_LIST_LIMIT, ImportResult, PyMongoError
 from ...utils.files import read_text_file
 from ...utils.formatters import format_document_preview
-from ...utils.validators import parse_document_json, parse_documents_json
-from ..widgets.dialogs import JsonDocumentDialog
+from ...utils.validators import parse_documents_json
 from ..widgets.schema_tab import SchemaActions, SchemaTab
 
 
@@ -24,7 +23,8 @@ class DocumentActions:
 
     back: Callable[[], None]
     list_documents: Callable[[], list[dict]]
-    add_document: Callable[[dict], list[dict]]
+    # Author: Archer - opens the Add document page (was a pop-up)
+    open_add_document: Callable[[], None]
     add_documents: Callable[[list[dict]], ImportResult]
     # Author: Archer - None hides the Schema tab
     schema: SchemaActions | None = None
@@ -84,7 +84,8 @@ class DocumentView(ctk.CTkFrame):
         add_buttons = ctk.CTkFrame(tab, fg_color="transparent")
         add_buttons.grid(row=2, column=0, padx=10, pady=10, sticky="w")
         ctk.CTkButton(
-            add_buttons, text="Add document", command=self._prompt_add_document
+            add_buttons, text="Add document",
+            command=self._actions.open_add_document
         ).pack(side="left", padx=(0, 10))
         ctk.CTkButton(
             add_buttons, text="Import JSON file", command=self._import_file
@@ -131,23 +132,6 @@ class DocumentView(ctk.CTkFrame):
         else:
             text = f"{count} document{'' if count == 1 else 's'}"
         self._status_label.configure(text=text)
-
-    def _prompt_add_document(self) -> None:
-        """Open the dialog for typing a document."""
-        JsonDocumentDialog(self, self._submit_document)
-
-    def _submit_document(self, text: str) -> str | None:
-        """Add the typed document. Returns an error message or None."""
-        try:
-            document = parse_document_json(text)
-            documents = self._actions.add_document(document)
-        except ValueError as error:
-            return str(error)
-        except PyMongoError:
-            return "Could not add the document. Check your permissions."
-        self._show_message("")
-        self._populate_documents(documents)
-        return None
 
     def _show_message(self, text: str, is_error: bool = False) -> None:
         """Show a red error or green success message."""
